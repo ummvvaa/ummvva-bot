@@ -1,0 +1,23 @@
+# Core
+Django==5.1.4
+djangorestframework==3.15.2
+psycopg[binary]==3.2.3
+python-dotenv==1.0.1
+
+# Async / queue
+celery==5.4.0
+redis==5.2.1
+
+# AI
+openai==1.59.6
+groq==0.13.1
+
+# NOTE: шифрование полей с данными пациентов добавим в Фазе 1, когда появятся
+# модели Patient/Message (например, django-cryptography / pgcrypto). В Фазе 0
+# персональных данных ещё нет — Clinic хранит только контент клиники.
+
+# Server
+gunicorn==23.0.0
+
+# Dev / testing
+requests==2.32.3
