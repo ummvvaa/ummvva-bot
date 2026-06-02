@@ -22,13 +22,18 @@ class _ReadOnlyAdmin(admin.ModelAdmin):
         return False
 
 
-class MessageInline(admin.TabularInline):
+class MessageInline(admin.StackedInline):
+    """Инлайн сообщений — только в детальном просмотре диалога.
+
+    Контент (зашифрованный в БД) расшифровывается ORM при чтении и виден здесь.
+    В списке диалогов контент НЕ показывается — только метаданные.
+    """
+
     model = Message
     extra = 0
     can_delete = False
-    # Контент НЕ показываем в инлайне-списке — только метаданные.
-    fields = ("role", "external_id", "created_at")
-    readonly_fields = ("role", "external_id", "created_at")
+    fields = ("role", "content", "external_id", "created_at")
+    readonly_fields = ("role", "content", "external_id", "created_at")
     ordering = ("created_at",)
 
     def has_add_permission(self, request, obj=None):
@@ -37,11 +42,15 @@ class MessageInline(admin.TabularInline):
 
 @admin.register(Conversation)
 class ConversationAdmin(_ReadOnlyAdmin):
-    list_display = ("id", "clinic", "customer_phone", "created_at", "updated_at")
+    list_display = ("id", "clinic", "customer_phone", "created_at", "updated_at", "message_count")
     list_filter = ("clinic",)
     search_fields = ("customer_phone",)
     readonly_fields = ("clinic", "customer_phone", "created_at", "updated_at")
     inlines = (MessageInline,)
+
+    @admin.display(description="Сообщений")
+    def message_count(self, obj):
+        return obj.messages.count()
 
 
 @admin.register(Message)

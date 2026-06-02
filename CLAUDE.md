@@ -94,6 +94,42 @@ docker compose exec web python manage.py createsuperuser
 ```
 Локальные команды управления: `docker compose exec web python manage.py <cmd>`.
 
+## Evolution API (WhatsApp для MVP)
+Реализация: `providers/whatsapp/evolution.py::EvolutionWhatsAppProvider`. Включается
+через `WHATSAPP_PROVIDER=evolution` + три ENV: `EVOLUTION_API_URL`, `EVOLUTION_API_KEY`,
+`EVOLUTION_INSTANCE`. По умолчанию остаётся `mock` (тесты без интернета).
+
+**Как поднять (локально):**
+1. Запустить Evolution API в Docker (отдельный сервис рядом с нашим compose):
+   ```bash
+   docker run -d --name evolution -p 8080:8080 \
+     -e AUTHENTICATION_API_KEY=<your-global-key> \
+     atendai/evolution-api:latest
+   ```
+   (для прода — постоянные тома + Postgres/Redis по доке Evolution).
+2. Создать инстанс (имя = `EVOLUTION_INSTANCE`):
+   ```bash
+   curl -X POST http://localhost:8080/instance/create \
+     -H "apikey: <your-global-key>" -H "Content-Type: application/json" \
+     -d '{"instanceName":"clinic1","integration":"WHATSAPP-BAILEYS"}'
+   ```
+3. Привязать номер по QR: открыть `http://localhost:8080/instance/connect/clinic1`
+   (или дёрнуть тот же endpoint) → отсканировать QR из WhatsApp на телефоне клиники
+   (Связанные устройства).
+4. Прописать webhook на наш приёмник входящих (URL поставим в Промпте #5,
+   когда появится эндпоинт `/webhook/whatsapp/`):
+   ```bash
+   curl -X POST http://localhost:8080/webhook/set/clinic1 \
+     -H "apikey: <your-global-key>" -H "Content-Type: application/json" \
+     -d '{"webhook":{"enabled":true,"url":"https://<наш-хост>/webhook/whatsapp/",
+          "events":["MESSAGES_UPSERT"]}}'
+   ```
+5. Заполнить `.env` (`EVOLUTION_API_URL`, `EVOLUTION_API_KEY`, `EVOLUTION_INSTANCE`),
+   выставить `WHATSAPP_PROVIDER=evolution`, перезапустить web/worker.
+
+Отправка: `POST {URL}/message/sendText/{instance}` с заголовком `apikey` и телом
+`{"number","text"}`. `download_media` — заглушка (NotImplementedError) до Фазы 2.
+
 ## Дорожная карта (фазы)
 - [x] **Фаза 0** — Каркас: Django + Celery + Postgres + mock-провайдеры + Clinic
 - [ ] **Фаза 1** — Текстовый бот на одну клинику (реальный Groq, webhook, обработка)

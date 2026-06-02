@@ -17,8 +17,13 @@ def get_whatsapp_provider() -> WhatsAppProvider:
     if name == "mock":
         return MockWhatsAppProvider()
 
-    # evolution и meta появятся в следующих фазах.
+    if name == "evolution":
+        from .evolution import EvolutionWhatsAppProvider
+
+        return EvolutionWhatsAppProvider()
+
+    # meta (Cloud API) появится в Фазе 6.
     raise ValueError(
         f"Неизвестный или ещё не реализованный WHATSAPP_PROVIDER='{name}'. "
-        "Доступно: mock."
+        "Доступно: mock, evolution."
     )

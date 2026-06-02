@@ -132,12 +132,19 @@ CELERY_TIMEZONE = TIME_ZONE
 WHATSAPP_PROVIDER = os.environ.get("WHATSAPP_PROVIDER", "mock")
 AI_PROVIDER = os.environ.get("AI_PROVIDER", "mock")
 
+# Секрет webhook приёма входящих. Передаётся провайдером в заголовке
+# X-Webhook-Token или query-параметре ?token=. Если пуст — проверка пропускается
+# (dev, mock). Для прода задать ОБЯЗАТЕЛЬНО и прописать в URL вебхука инстанса.
+WHATSAPP_WEBHOOK_TOKEN = os.environ.get("WHATSAPP_WEBHOOK_TOKEN", "")
+
 # Настройки провайдеров (читаются их реализациями).
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_BASE_URL = os.environ.get("GROQ_BASE_URL", "https://api.groq.com")
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 GROQ_WHISPER_MODEL = os.environ.get("GROQ_WHISPER_MODEL", "whisper-large-v3")
 GROQ_TEMPERATURE = float(os.environ.get("GROQ_TEMPERATURE", "0.3"))
+# Макс. попыток при 429 / 5xx от AI-провайдера (экспоненциальный backoff).
+AI_MAX_RETRIES = int(os.environ.get("AI_MAX_RETRIES", "3"))
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 EVOLUTION_API_URL = os.environ.get("EVOLUTION_API_URL", "")
