@@ -27,8 +27,13 @@ ALLOWED_HOSTS = [
     if h.strip()
 ]
 
-# Ключ шифрования полей БД (медицинские/персональные данные шифруем на уровне БД).
-FERNET_KEYS = [os.environ.get("FERNET_KEY", "")]
+# Ключ шифрования полей БД (медицинские/персональные данные шифруем на уровне поля).
+# Используется django-fernet-fields-v2 (settings.FERNET_KEYS). Ключ берём из env
+# FIELD_ENCRYPTION_KEY. Если не задан — в dev библиотека откатывается на SECRET_KEY,
+# но для прода ОБЯЗАТЕЛЬНО задать отдельный ключ FIELD_ENCRYPTION_KEY.
+_field_encryption_key = os.environ.get("FIELD_ENCRYPTION_KEY", "")
+if _field_encryption_key:
+    FERNET_KEYS = [_field_encryption_key]
 
 # --- Приложения ---
 INSTALLED_APPS = [
@@ -42,6 +47,7 @@ INSTALLED_APPS = [
     "rest_framework",
     # Local
     "clinics",
+    "messaging",
 ]
 
 MIDDLEWARE = [

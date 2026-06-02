@@ -13,6 +13,30 @@
 - [ ] Фаза 6 — Прод (Meta Cloud API, деплой, мониторинг)
 
 ## Завершённые промпты
+### Промпт #1.2 — App `messaging` + шифрование контента — ✅ 2026-06-02
+- [x] Создан Django app `messaging`, зарегистрирован в `INSTALLED_APPS`
+- [x] Шифрование полей подключено (как планировалось из Фазы 0): пакет
+      `django-fernet-fields-v2==0.7` (+ `cryptography==48.0.0`) в requirements.txt
+- [x] Ключ берётся из env `FIELD_ENCRYPTION_KEY` → `settings.FERNET_KEYS`.
+      **Переименовано** со старого `FERNET_KEY` (он нигде ещё не использовался).
+      Если ключ пуст — библиотека откатывается на SECRET_KEY (для прода задать!).
+      В `.env.example` — пояснение + команда генерации; в локальный `.env`
+      сгенерирован реальный Fernet-ключ.
+- [x] Модель `Conversation`: FK `clinic` (CASCADE, indexed), `customer_phone`
+      (indexed), `created_at`/`updated_at`, `unique_together(clinic, customer_phone)`.
+      Мультитенантность через `clinic_id` живёт на диалоге.
+- [x] Модель `Message`: FK `conversation`, `role` (user/assistant/system),
+      `content` = **EncryptedTextField** (медданные, шифротекст в БД),
+      `external_id` (nullable, indexed — для дедупа входящих), `created_at`,
+      `ordering = ["created_at"]`.
+- [x] Admin: обе модели зарегистрированы, **view-only** (add/change запрещены,
+      все поля readonly). В списках контент НЕ расшифровывается — только
+      метаданные; `content` виден лишь в детальном просмотре Message.
+- [x] `makemigrations` + `migrate` прошли в Docker; `manage.py check` — 0 issues.
+- [x] Smoke-тест шифрования: ORM отдаёт открытый текст, в БД лежит Fernet-токен
+      (`gAAAA...`), открытого текста в сырой строке нет; поиск по `external_id` ок.
+- [x] Образы web/worker пересобраны — пакет зашит в image; `migrate --check` = 0.
+
 ### Промпт #1.1 — GroqAIProvider — ✅ 2026-06-02
 - [x] `groq==0.13.1` добавлен в requirements.txt
 - [x] `providers/ai/groq.py` — GroqAIProvider(AIProvider): generate() через Groq SDK; transcribe() — заглушка NotImplementedError (Фаза 2)
@@ -45,8 +69,10 @@
 история диалога, системный промпт из данных клиники.
 
 ## Что должно быть сделано (Фаза 1) — план
-- [ ] Модели Patient (с полем согласия на обработку ПДн) и Message (clinic_id!),
-      с шифрованием полей переписки на уровне БД
+- [x] Модели переписки + шифрование контента (см. Промпт #1.2). Сделано через
+      `Conversation` (несёт `clinic_id`, мультитенант) + `Message` (EncryptedTextField).
+      ⚠️ Поле «согласие на обработку ПДн» ещё НЕ добавлено — оно ляжет на
+      модель пациента/контакта (отдельный промпт), сейчас сущности Patient нет.
 - [ ] webhook-эндпоинт приёма входящих (DRF), маршрутизация по номеру-получателю
 - [ ] Celery-задача обработки: определить клинику → собрать системный промпт →
       история последних 10 сообщений → AIProvider.generate() → WhatsAppProvider.send_message()
@@ -73,9 +99,12 @@
   `providers/ai/factory.py::get_ai_provider()`. По умолчанию = mock.
 - **Порт Postgres на хосте — 5433** (5432 был занят локальным Postgres). Внутри
   docker-сети сервис называется `db:5432`.
-- **Шифрование ПДн отложено до Фазы 1**: в Фазе 0 персональных данных нет (Clinic
-  хранит только контент клиники). Пакет шифрования подключим вместе с моделями
-  Patient/Message (см. комментарий в requirements.txt).
+- **Шифрование ПДн подключено (Фаза 1, Промпт #1.2).** Пакет
+  `django-fernet-fields-v2`; `Message.content` = `EncryptedTextField` (в БД —
+  Fernet-токен). Ключ — env `FIELD_ENCRYPTION_KEY` → `settings.FERNET_KEYS`
+  (раньше планировался `FERNET_KEY`, переименован). Номер пациента
+  (`customer_phone`) НЕ шифруется — по нему ищем диалог (зашифрованное поле
+  не индексируется).
 - Python 3.12 — только внутри Docker (на хосте установлен 3.14, не используется для запуска).
 - Тестовый суперюзер (создан в dev-БД, том pgdata): admin / admin12345.
 - Запуск: `docker compose up --build`; админка http://localhost:8000/admin/.

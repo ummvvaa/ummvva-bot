@@ -12,9 +12,11 @@ redis==5.2.1
 openai==1.59.6
 groq==0.13.1
 
-# NOTE: шифрование полей с данными пациентов добавим в Фазе 1, когда появятся
-# модели Patient/Message (например, django-cryptography / pgcrypto). В Фазе 0
-# персональных данных ещё нет — Clinic хранит только контент клиники.
+# Шифрование полей с данными пациентов (медданные шифруем на уровне поля).
+# django-fernet-fields-v2 — поддерживаемый форк, шифрует значение перед записью
+# в БД (Fernet/AES). Ключ — settings.FERNET_KEYS (из env FIELD_ENCRYPTION_KEY).
+django-fernet-fields-v2==0.7
+cryptography==48.0.0
 
 # Server
 gunicorn==23.0.0
