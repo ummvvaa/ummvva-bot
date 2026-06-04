@@ -31,6 +31,7 @@ import logging
 from datetime import date, time
 from datetime import timedelta
 from typing import TYPE_CHECKING, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.conf import settings
 from django.utils import timezone
@@ -67,6 +68,24 @@ _HANDOFF_REPLY = (
     "Хорошо, давайте я передам заявку администратору — он перезвонит "
     "и уточнит детали. Спасибо за обращение!"
 )
+
+
+def _clinic_today(clinic: "Clinic") -> date:
+    """Сегодняшняя дата В ЧАСОВОМ ПОЯСЕ КЛИНИКИ.
+
+    «Завтра»/«сегодня» пациент имеет в виду относительно местного времени клиники
+    (клиники в Казахстане, сервер может быть в UTC). Берём таймзону из самой
+    клиники; если она задана криво — безопасный фолбэк на серверную дату.
+    """
+    try:
+        return timezone.now().astimezone(ZoneInfo(clinic.timezone)).date()
+    except (ZoneInfoNotFoundError, ValueError):
+        logger.warning(
+            "[booking] неизвестная таймзона %r у клиники %s — берём серверную дату.",
+            clinic.timezone,
+            clinic.pk,
+        )
+        return timezone.localdate()
 
 
 def _first_missing(draft: dict, conversation_name: Optional[str] = None) -> Optional[str]:
@@ -160,7 +179,12 @@ def handle_booking_turn(
     filled_new = _merge_slots(draft, extracted)
 
     # Best-effort разбор даты/времени из сырых строк (raw храним всегда).
-    date, time = parse_when(draft.get("preferred_date_raw"), draft.get("preferred_time_raw"))
+    # «Завтра/сегодня» считаем относительно местного времени КЛИНИКИ.
+    date, time = parse_when(
+        draft.get("preferred_date_raw"),
+        draft.get("preferred_time_raw"),
+        today=_clinic_today(clinic),
+    )
     draft["preferred_date"] = date.isoformat() if date else None
     draft["preferred_time"] = time.isoformat() if time else None
 

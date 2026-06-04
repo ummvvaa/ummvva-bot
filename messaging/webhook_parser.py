@@ -3,10 +3,15 @@
 
 Задача парсера — быстро и ТОЛЕРАНТНО вытащить из «сырого» payload то, что нужно
 для маршрутизации и обработки:
-  • clinic_number  — номер-получатель (наш номер клиники, по нему ищем Clinic);
+  • instance_name  — имя инстанса Evolution (надёжнейший ключ маршрутизации клиники);
+  • clinic_number  — номер-получатель (наш номер клиники, запасной ключ Clinic);
   • customer_phone — номер отправителя (клиент);
   • text           — текст сообщения;
   • external_id    — ID сообщения у провайдера (для дедупликации входящих).
+
+Маршрутизация клиники (в Celery-таске) идёт СНАЧАЛА по instance_name (он уникален
+на клинику — самый надёжный признак того, КУДА пришло сообщение), и лишь если
+инстанс не дал клинику — по номеру-получателю.
 
 Если payload не похож на входящее текстовое сообщение от клиента (эхо нашего
 исходящего, групповой чат, не-текст, нет текста) — возвращаем None, и webhook
@@ -42,10 +47,11 @@ VOICE_MESSAGE_TYPES = ("audioMessage", "pttMessage")
 class IncomingMessage:
     """Извлечённые из webhook поля входящего сообщения."""
 
-    clinic_number: str        # номер-получатель (наш номер клиники)
+    clinic_number: str        # номер-получатель (наш номер клиники, запасной ключ)
     customer_phone: str       # номер отправителя (клиент)
     text: str                 # текст сообщения (для голосового — пустой до транскрипции)
     external_id: str | None   # ID сообщения у провайдера / key.id (дедуп + скачивание медиа)
+    instance_name: str = ""   # имя инстанса Evolution (основной ключ маршрутизации клиники)
     message_type: str = "conversation"  # тип входящего (conversation, audioMessage, …)
     push_name: str = ""       # имя отправителя из профиля WhatsApp (data.pushName)
 
@@ -105,8 +111,13 @@ def parse_evolution_payload(payload: object) -> IncomingMessage | None:
 
     customer_phone = _strip_jid(remote_jid)
 
+    # Имя инстанса Evolution — основной ключ маршрутизации клиники (уникален на
+    # клинику, не зависит от формата номеров). Верхнеуровневое поле `instance`.
+    instance_name = (payload.get("instance") or "").strip()
+
     # Наш номер (получатель) — владелец инстанса. В payload Evolution это
     # верхнеуровневое поле `sender`; на всякий случай смотрим и data.owner.
+    # Запасной ключ маршрутизации, если по инстансу клиника не нашлась.
     clinic_number = _strip_jid(
         payload.get("sender") or data.get("owner") or ""
     )
@@ -121,8 +132,11 @@ def parse_evolution_payload(payload: object) -> IncomingMessage | None:
     message_type = data.get("messageType") or "conversation"
     is_voice = message_type in VOICE_MESSAGE_TYPES
 
-    # Маршрутизация невозможна без номеров — отбрасываем.
-    if not clinic_number or not customer_phone:
+    # Без отправителя обрабатывать нечего; для маршрутизации нужен хотя бы один
+    # признак получателя — инстанс ИЛИ номер клиники (по любому найдём Clinic).
+    if not customer_phone:
+        return None
+    if not instance_name and not clinic_number:
         return None
     # Голосовое: текста ещё нет (транскрипция в Celery), но нужен key.id для скачивания.
     if is_voice:
@@ -137,6 +151,7 @@ def parse_evolution_payload(payload: object) -> IncomingMessage | None:
         customer_phone=customer_phone,
         text=text,
         external_id=external_id,
+        instance_name=instance_name,
         message_type=message_type,
         push_name=push_name,
     )

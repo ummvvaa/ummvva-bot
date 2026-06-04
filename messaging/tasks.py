@@ -47,6 +47,29 @@ _VOICE_FAIL_REPLY = "Не смог разобрать голосовое, пов
 _VOICE_MESSAGE_TYPES = ("audioMessage", "pttMessage")
 
 
+def _resolve_clinic(instance_name: str, clinic_number: str) -> Clinic | None:
+    """Найти клинику по тому, КУДА пришло сообщение (мультитенант-маршрутизация).
+
+    Приоритет:
+      1. instance_name — имя инстанса Evolution. Уникален на клинику, не зависит
+         от формата номеров — самый надёжный признак получателя.
+      2. clinic_number — номер-получатель (whatsapp_number). Запасной ключ, если
+         инстанс пуст или клиника по нему не заведена.
+
+    is_active здесь НЕ фильтруем намеренно: клинику опознаём по идентичности, а
+    активность проверяет вызывающий код (иначе неактивная клиника по инстансу
+    «провалилась» бы в поиск по номеру и могла бы совпасть с ДРУГОЙ клиникой).
+    Возвращает Clinic или None, если ни по инстансу, ни по номеру не нашли.
+    """
+    if instance_name:
+        clinic = Clinic.objects.filter(instance_name=instance_name).first()
+        if clinic is not None:
+            return clinic
+    if clinic_number:
+        return Clinic.objects.filter(whatsapp_number=clinic_number).first()
+    return None
+
+
 def _booking_confirmation_reply(booking, clinic) -> str:
     """Реплика пациенту после создания заявки. НЕ «вы записаны» — только «передал»."""
     parts = [p for p in [booking.service, booking.preferred_date_raw, booking.preferred_time_raw] if p]
@@ -63,6 +86,7 @@ def handle_incoming_message(
     customer_phone: str,
     text: str = "",
     external_id: str | None = None,
+    instance_name: str = "",
     message_type: str = "conversation",
     push_name: str = "",
 ) -> None:
@@ -75,23 +99,38 @@ def handle_incoming_message(
     через брокер Celery.
     """
     # Метка для логов до того, как найдём клинику.
-    clinic_hint = f"number={clinic_number}"
+    clinic_hint = f"instance={instance_name or '—'} number={clinic_number or '—'}"
 
     try:
-        # 0a. Это сообщение ОТ МЕНЕДЖЕРА клиники? Тогда — ветка менеджера, НЕ пациента.
-        #     Проверяем ДО любой пациентской обработки (голос/диалог/запись), чтобы
-        #     команды менеджера не заводили новую переписку и не считались за пациента.
-        manager_clinic = Clinic.objects.filter(
-            manager_whatsapp=customer_phone, is_active=True
-        ).first()
-        if manager_clinic is not None:
-            clinic_hint = str(manager_clinic.id)
-            reply = handle_manager_message(manager_clinic, text)
+        # 0. Маршрутизация (мультитенант): по тому, КУДА пришло сообщение —
+        #    сначала по instance_name инстанса Evolution, затем по номеру-получателю.
+        #    Вся дальнейшая работа идёт СТРОГО в контексте этой клиники.
+        clinic = _resolve_clinic(instance_name, clinic_number)
+        if clinic is None or not clinic.is_active:
+            # Не светим текст сообщения в логах (медданные) — только маршрут-ключи.
+            logger.warning(
+                "Входящее (instance=%r, number=%r): %s — пропуск.",
+                instance_name,
+                clinic_number,
+                "клиника не найдена" if clinic is None else "клиника неактивна",
+            )
+            return
+
+        clinic_hint = str(clinic.id)
+
+        # 0a. Это сообщение ОТ МЕНЕДЖЕРА этой клиники? Тогда — ветка менеджера,
+        #     НЕ пациента. Проверяем СТРОГО в контексте найденной клиники (а не
+        #     глобально по всем клиникам): менеджер клиники A, написавший как
+        #     пациент в клинику B, не должен попасть в менеджерскую ветку A.
+        #     Делаем это ДО любой пациентской обработки (голос/диалог/запись),
+        #     чтобы команды менеджера не заводили новую переписку.
+        if clinic.manager_whatsapp and clinic.manager_whatsapp == customer_phone:
+            reply = handle_manager_message(clinic, text)
             if reply:
                 get_whatsapp_provider().send_message(customer_phone, reply)
             logger.info(
                 "[tasks] сообщение от менеджера обработано (clinic=%s).",
-                manager_clinic.id,
+                clinic.id,
             )
             return
 
@@ -130,21 +169,9 @@ def handle_incoming_message(
             # Дальше — общий текстовый поток обработки.
             text = transcript
 
-        # 1. Маршрутизация по номеру-получателю (мультитенант).
-        clinic = Clinic.objects.filter(
-            whatsapp_number=clinic_number, is_active=True
-        ).first()
-        if clinic is None:
-            # Не светим текст сообщения в логах (медданные) — только номер-получатель.
-            logger.warning(
-                "Входящее на номер %s: активная клиника не найдена — пропуск.",
-                clinic_number,
-            )
-            return
-
-        clinic_hint = str(clinic.id)
-
-        # 2. Диалог: один на пару (клиника, номер клиента).
+        # 2. Диалог: один на пару (клиника, номер клиента). Изоляция: диалог
+        #    всегда привязан к найденной клинике — один и тот же номер клиента,
+        #    написавший в две клиники, ведёт две независимые беседы.
         conversation, _ = Conversation.objects.get_or_create(
             clinic=clinic, customer_phone=customer_phone
         )

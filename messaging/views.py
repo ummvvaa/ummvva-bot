@@ -71,6 +71,7 @@ def whatsapp_webhook(request):
         customer_phone=incoming.customer_phone,
         text=incoming.text,
         external_id=incoming.external_id,
+        instance_name=incoming.instance_name,
         message_type=incoming.message_type,
         push_name=incoming.push_name,
     )
