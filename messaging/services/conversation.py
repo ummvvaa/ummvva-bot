@@ -54,8 +54,9 @@ def build_messages(
     сообщение пользователя. `conversation` может быть None (новый диалог,
     истории ещё нет).
     """
+    customer_name = getattr(conversation, "customer_name", None) if conversation is not None else None
     messages: list[ChatMessage] = [
-        {"role": "system", "content": build_system_prompt(clinic)}
+        {"role": "system", "content": build_system_prompt(clinic, customer_name=customer_name)}
     ]
 
     if conversation is not None:

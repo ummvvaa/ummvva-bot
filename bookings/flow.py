@@ -59,6 +59,7 @@ _QUESTIONS = {
     "service": "Подскажите, пожалуйста, на какую услугу хотели бы записаться?",
     "date": "На какой день вам было бы удобно прийти?",
     "time": "В какое время вам удобно?",
+    "name": "Как вас зовут?",
 }
 
 # Реплика анти-тупика: мягко передаём менеджеру, НЕ говорим «вы записаны».
@@ -68,12 +69,18 @@ _HANDOFF_REPLY = (
 )
 
 
-def _first_missing(draft: dict) -> Optional[str]:
-    """Первый недостающий слот в порядке: услуга → день → время.
+def _first_missing(draft: dict, conversation_name: Optional[str] = None) -> Optional[str]:
+    """Первый недостающий слот в порядке: услуга → день → время → имя.
 
     Слот считается собранным, если пациент что-то сказал по нему (сырая строка
     непустая). Распарсенные date/time best-effort — для них наличие сырой строки
     достаточно (менеджер дочитает raw, если разбор не удался).
+
+    После основных трёх слотов — шаг имени:
+    • если имя уже известно из профиля — возвращаем "name_confirm" (подтвердить);
+    • если неизвестно — возвращаем "name" (спросить).
+    • "_name_pending_confirm" в черновике означает, что подтверждение уже было
+      отправлено и обрабатывается в следующем ходе (здесь возвращаем None).
     """
     if not draft.get("service"):
         return "service"
@@ -81,6 +88,11 @@ def _first_missing(draft: dict) -> Optional[str]:
         return "date"
     if not draft.get("preferred_time_raw"):
         return "time"
+    # Имя: собираем после основных слотов.
+    if not draft.get("customer_name") and not draft.get("_name_pending_confirm"):
+        if conversation_name:
+            return "name_confirm"
+        return "name"
     return None
 
 
@@ -112,8 +124,32 @@ def handle_booking_turn(
     `ai` можно передать явно (для офлайн-тестов на mock); по умолчанию провайдер
     берётся в `extract_booking_intent` через фабрику.
     """
-    extracted = extract_booking_intent(incoming_text, clinic, ai=ai)
+    draft = dict(conversation.booking_draft or {})
     prev_stage = conversation.booking_stage
+
+    # --- Специальный ход: пациент отвечает на вопрос подтверждения имени ---
+    # «_name_pending_confirm» в черновике означает, что на прошлом ходе бот спросил
+    # «Записываю на имя X, верно?». Обрабатываем ответ (любой ответ считается
+    # подтверждением; если в ответе встречается другое имя — обновляем).
+    if draft.get("_name_pending_confirm"):
+        extracted = extract_booking_intent(incoming_text, clinic, ai=ai)
+        new_name = (extracted.get("customer_name") or "").strip()
+        if new_name:
+            draft["customer_name"] = new_name
+        draft.pop("_name_pending_confirm", None)
+        draft.pop("_miss_count", None)
+        update_fields = ["booking_stage", "booking_draft", "updated_at"]
+        # Если пациент назвал другое имя — обновляем и на диалоге.
+        if new_name and conversation.customer_name != new_name:
+            conversation.customer_name = new_name
+            update_fields.append("customer_name")
+        conversation.booking_stage = Conversation.BookingStage.READY
+        conversation.booking_draft = draft
+        conversation.save(update_fields=update_fields)
+        return None
+
+    # --- Обычный ход слот-филлинга ---
+    extracted = extract_booking_intent(incoming_text, clinic, ai=ai)
 
     # Не про запись и мы ещё не собираем → это обычный вопрос, пусть его обработает
     # текстовый флоу Фазы 1. Состояние не трогаем.
@@ -121,7 +157,6 @@ def handle_booking_turn(
         return None
 
     # Запись активна (явное намерение ИЛИ уже собираем). Дополняем черновик.
-    draft = dict(conversation.booking_draft or {})
     filled_new = _merge_slots(draft, extracted)
 
     # Best-effort разбор даты/времени из сырых строк (raw храним всегда).
@@ -129,7 +164,8 @@ def handle_booking_turn(
     draft["preferred_date"] = date.isoformat() if date else None
     draft["preferred_time"] = time.isoformat() if time else None
 
-    missing = _first_missing(draft)
+    known_name = (conversation.customer_name or "").strip() or None
+    missing = _first_missing(draft, known_name)
 
     # Всё собрано → черновик готов, дальше его подхватит #4 (заявка + реплика).
     if missing is None:
@@ -164,11 +200,20 @@ def handle_booking_turn(
         return _HANDOFF_REPLY
 
     # Ещё переспрашиваем — ровно про ОДИН недостающий слот.
-    draft["_miss_count"] = misses
+    if missing == "name_confirm":
+        # Имя известно из профиля: предзаполняем в черновике, ставим флаг ожидания.
+        draft["customer_name"] = known_name
+        draft["_name_pending_confirm"] = True
+        draft.pop("_miss_count", None)
+        question: str = f"Записываю на имя {known_name}, верно?"
+    else:
+        draft["_miss_count"] = misses
+        question = _QUESTIONS[missing]
+
     conversation.booking_stage = Conversation.BookingStage.COLLECTING
     conversation.booking_draft = draft
     conversation.save(update_fields=["booking_stage", "booking_draft", "updated_at"])
-    return _QUESTIONS[missing]
+    return question
 
 
 def finalize_booking(conversation: Conversation, clinic: "Clinic") -> BookingRequest:

@@ -45,7 +45,7 @@ class ConversationAdmin(_ReadOnlyAdmin):
     list_display = ("id", "clinic", "customer_phone", "created_at", "updated_at", "message_count")
     list_filter = ("clinic",)
     search_fields = ("customer_phone",)
-    readonly_fields = ("clinic", "customer_phone", "created_at", "updated_at")
+    readonly_fields = ("clinic", "customer_phone", "customer_name", "created_at", "updated_at")
     inlines = (MessageInline,)
 
     @admin.display(description="Сообщений")

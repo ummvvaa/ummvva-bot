@@ -64,6 +64,7 @@ def handle_incoming_message(
     text: str = "",
     external_id: str | None = None,
     message_type: str = "conversation",
+    push_name: str = "",
 ) -> None:
     """Обработать одно входящее сообщение (текст или голос) и ответить клиенту.
 
@@ -147,6 +148,13 @@ def handle_incoming_message(
         conversation, _ = Conversation.objects.get_or_create(
             clinic=clinic, customer_phone=customer_phone
         )
+
+        # 2a. Сохраняем имя из профиля WhatsApp (pushName), только если:
+        #     • пришло непустое значение (не перезаписываем пустым);
+        #     • имя ещё не было сохранено ранее (не затираем вручную сохранённое).
+        if push_name and not conversation.customer_name:
+            conversation.customer_name = push_name
+            conversation.save(update_fields=["customer_name", "updated_at"])
 
         # 3. Дедупликация: если это сообщение уже сохранено (ретрай вебхука) — выходим.
         if external_id and conversation.messages.filter(

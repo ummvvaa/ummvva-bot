@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 from django.db import models
-from fernet_fields import EncryptedTextField
+from fernet_fields import EncryptedCharField, EncryptedTextField
 
 
 class Conversation(models.Model):
@@ -38,6 +38,13 @@ class Conversation(models.Model):
     # По номеру ищем диалог, поэтому он НЕ шифруется (зашифрованное поле нельзя
     # индексировать и искать на стороне БД).
     customer_phone = models.CharField("Телефон пациента", max_length=32, db_index=True)
+
+    # Имя пациента из профиля WhatsApp (pushName) или введённое при записи.
+    # ПДн → зашифровано. Обновляется автоматически из pushName, если пришло
+    # непустое и имя ещё не было сохранено ранее.
+    customer_name = EncryptedCharField(
+        "Имя пациента", max_length=128, null=True, blank=True
+    )
 
     # --- Состояние диалога записи (Фаза 3, слот-филлинг) ---
     # Стадия записи: none → collecting → ready. Хранится на диалоге, чтобы между

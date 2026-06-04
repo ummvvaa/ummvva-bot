@@ -46,10 +46,16 @@ def _extract_slots_mock(text: str, clinic: "Clinic") -> dict:
     """Грубое извлечение слотов из сообщения — ТОЛЬКО для mock (офлайн-тесты).
 
     Услугу ищем по основам слов из прайса клиники, день — по маркерам,
-    время — по наличию числа часов. Реальное извлечение делает Groq.
+    время — по наличию числа часов, имя — по фразам «меня зовут/я X».
+    Реальное извлечение делает Groq.
     """
     s = (text or "").lower()
-    slots: dict = {"service": None, "preferred_date_raw": None, "preferred_time_raw": None}
+    slots: dict = {
+        "service": None,
+        "preferred_date_raw": None,
+        "preferred_time_raw": None,
+        "customer_name": None,
+    }
 
     # Услуга: совпадение основы (>=5 букв) любого слова из названия услуги.
     for item in getattr(clinic, "services_json", None) or []:
@@ -73,6 +79,14 @@ def _extract_slots_mock(text: str, clinic: "Clinic") -> dict:
     m = re.search(r"\b(\d{1,2})(?:[:.]\d{2})?\b", s)
     if m and 0 <= int(m.group(1)) <= 23:
         slots["preferred_time_raw"] = text.strip()
+
+    # Имя: «меня зовут X», «зовут X», «мое/моё имя X», «я X» — грубая эвристика.
+    name_match = re.search(
+        r"(?:меня зовут|зовут|мое имя|моё имя|называйте меня|я)\s+([а-яёa-z]{2,})",
+        s,
+    )
+    if name_match:
+        slots["customer_name"] = name_match.group(1).capitalize()
 
     return slots
 
@@ -111,7 +125,7 @@ class MockAIProvider(AIProvider):
                     "service": slots["service"],
                     "preferred_date_raw": slots["preferred_date_raw"],
                     "preferred_time_raw": slots["preferred_time_raw"],
-                    "customer_name": None,
+                    "customer_name": slots["customer_name"],
                 },
                 ensure_ascii=False,
             )

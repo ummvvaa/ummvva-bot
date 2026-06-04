@@ -524,6 +524,40 @@ EVOLUTION_INSTANCE (см. CLAUDE.md, раздел «Evolution API (WhatsApp дл
 - Изоляция заявок: менеджер клиники A не трогает заявки клиники B (уже реализовано
   в bookings/manager.py, добавить тест с двумя клиниками сразу).
 
+### Промпт #3.8 — Автоимпорт имени из pushName + умная запись ✅ 2026-06-04
+- [x] `Conversation.customer_name` (EncryptedCharField, null=True) — новое поле для
+      хранения имени пациента из WhatsApp-профиля. Миграция `messaging/0003_*`.
+- [x] Парсер вебхука: `IncomingMessage.push_name` берётся из `data.pushName` payload
+      Evolution API. Передаётся через `views.py` в `handle_incoming_message.delay`.
+- [x] `handle_incoming_message` (tasks.py): после `get_or_create(conversation)` —
+      сохраняем `push_name` в `conversation.customer_name`, только если пришло
+      непустое и имя ещё не было сохранено ранее (не перезаписываем вручную).
+- [x] `build_system_prompt(clinic, customer_name=None)` — новый параметр. Если имя
+      известно: блок «ИМЯ ПАЦИЕНТА: X — обращайся по имени, подтверди перед заявкой».
+      Если нет: «неизвестно — спроси при записи». `build_messages` в conversation.py
+      автоматически берёт имя из `conversation.customer_name`.
+- [x] Логика записи (flow.py):
+      • `_first_missing` расширен четвёртым слотом после услуга/день/время:
+        `"name_confirm"` (если имя известно) или `"name"` (если нет).
+      • Известное имя: бот спрашивает «Записываю на имя X, верно?», ставит
+        `_name_pending_confirm=True` в черновике, stage=COLLECTING.
+      • Следующий ход (ответ пациента): специальная ветка очищает флаг, при
+        необходимости обновляет имя (если назвал другое), stage=READY.
+      • Неизвестное имя: бот спрашивает «Как вас зовут?» (через `_QUESTIONS["name"]`);
+        mock-извлечение обновлено — грубо распознаёт «меня зовут X» / «зовут X».
+- [x] `providers/ai/mock.py` — `_extract_slots_mock` расширен: извлекает имя по
+      шаблону «меня зовут/зовут/я X»; json_mode теперь включает `customer_name`.
+- [x] Тесты — `messaging/test_push_name.py` (6 шт.) + обновлён `test_full_slot_filling_flow`:
+      • `test_push_name_saved_on_first_message` — pushName сохраняется на диалоге;
+      • `test_push_name_not_overwritten_by_empty` — пустой push_name не затирает имя;
+      • `test_booking_confirms_known_name` — известное имя → «Записываю на имя X, верно?»;
+      • `test_booking_asks_name_when_unknown` — пустое имя → «Как вас зовут?»;
+      • `test_name_confirmation_accepted` — «да» → stage=READY, имя сохранено;
+      • `test_name_confirmation_corrected` — «нет, меня зовут Алия» → имя обновлено.
+      `test_full_slot_filling_flow` обновлён: после времени — спрашивает имя, после
+      «меня зовут Иван» — READY.
+- [x] **44/44 pytest зелёных**, `check` — 0 issues.
+
 ## Что должно быть сделано (Фаза 1) — план
 - [x] Модели переписки + шифрование контента (см. Промпт #1.2). Сделано через
       `Conversation` (несёт `clinic_id`, мультитенант) + `Message` (EncryptedTextField).

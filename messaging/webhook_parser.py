@@ -47,6 +47,7 @@ class IncomingMessage:
     text: str                 # текст сообщения (для голосового — пустой до транскрипции)
     external_id: str | None   # ID сообщения у провайдера / key.id (дедуп + скачивание медиа)
     message_type: str = "conversation"  # тип входящего (conversation, audioMessage, …)
+    push_name: str = ""       # имя отправителя из профиля WhatsApp (data.pushName)
 
 
 def _strip_jid(jid: str | None) -> str:
@@ -114,6 +115,9 @@ def parse_evolution_payload(payload: object) -> IncomingMessage | None:
 
     external_id = key.get("id") or None
 
+    # Имя отправителя из профиля WhatsApp — опциональное поле, пустая строка если нет.
+    push_name = (data.get("pushName") or "").strip()
+
     message_type = data.get("messageType") or "conversation"
     is_voice = message_type in VOICE_MESSAGE_TYPES
 
@@ -134,4 +138,5 @@ def parse_evolution_payload(payload: object) -> IncomingMessage | None:
         text=text,
         external_id=external_id,
         message_type=message_type,
+        push_name=push_name,
     )

@@ -54,8 +54,13 @@ def test_full_slot_filling_flow(conversation):
     reply = _turn(conversation, "завтра")
     assert reply == _QUESTIONS["time"]
 
-    # "в 15" → всё собрано → ready, вопросов больше нет.
+    # "в 15" → основные слоты собраны, имя неизвестно → спрашиваем имя.
     reply = _turn(conversation, "в 15")
+    assert reply == _QUESTIONS["name"]
+    assert conversation.booking_stage == Conversation.BookingStage.COLLECTING
+
+    # "меня зовут Иван" → имя собрано → ready.
+    reply = _turn(conversation, "меня зовут Иван")
     assert reply is None
     assert conversation.booking_stage == Conversation.BookingStage.READY
 
@@ -63,6 +68,7 @@ def test_full_slot_filling_flow(conversation):
     assert draft["service"]
     assert draft["preferred_date_raw"] == "завтра"
     assert draft["preferred_time_raw"] == "в 15"
+    assert draft["customer_name"] == "Иван"
     # Время распарсилось best-effort; день — относительный, тоже распарсился.
     assert draft["preferred_time"] == "15:00:00"
     assert draft["preferred_date"] is not None
