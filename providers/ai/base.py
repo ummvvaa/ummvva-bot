@@ -28,16 +28,28 @@ class AIProvider(ABC):
     """Базовый интерфейс для всех AI-провайдеров."""
 
     @abstractmethod
-    def generate(self, messages: list[ChatMessage], clinic: "Clinic") -> str:
+    def generate(
+        self,
+        messages: list[ChatMessage],
+        clinic: "Clinic",
+        json_mode: bool = False,
+    ) -> str:
         """Сгенерировать ответ ассистента.
 
         `messages` — история диалога (включая системный промпт первым элементом).
         `clinic` — клиника, под которую сформирован контекст (для выбора модели/тона).
-        Возвращает текст ответа.
+        `json_mode` — если True, модель должна вернуть СТРОГО JSON-объект без
+        преамбулы и markdown (structured output). Используется для извлечения
+        структурированных данных (например, намерения записаться — Фаза 3).
+        Возвращает текст ответа (в json_mode — строку с JSON).
         """
         raise NotImplementedError
 
     @abstractmethod
-    def transcribe(self, audio_bytes: bytes, language: str = "ru") -> str:
-        """Расшифровать голосовое сообщение в текст (Whisper). Возвращает текст."""
+    def transcribe(self, audio_bytes: bytes, mimetype: str) -> str | None:
+        """Расшифровать голосовое сообщение в текст (Whisper).
+
+        `mimetype` — MIME-тип аудио, например "audio/ogg;codecs=opus".
+        Возвращает распознанный текст или None при ошибке.
+        """
         raise NotImplementedError

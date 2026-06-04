@@ -18,6 +18,14 @@ from fernet_fields import EncryptedTextField
 class Conversation(models.Model):
     """Диалог с одним номером пациента в рамках одной клиники."""
 
+    class BookingStage(models.TextChoices):
+        # Запись не ведётся — обычный текстовый флоу Фазы 1.
+        NONE = "none", "Нет записи"
+        # Бот дозапрашивает недостающие слоты (услуга/день/время).
+        COLLECTING = "collecting", "Собираем данные"
+        # Все нужные слоты собраны — черновик готов к передаче менеджеру (#4).
+        READY = "ready", "Готово к передаче менеджеру"
+
     clinic = models.ForeignKey(
         "clinics.Clinic",
         verbose_name="Клиника",
@@ -30,6 +38,20 @@ class Conversation(models.Model):
     # По номеру ищем диалог, поэтому он НЕ шифруется (зашифрованное поле нельзя
     # индексировать и искать на стороне БД).
     customer_phone = models.CharField("Телефон пациента", max_length=32, db_index=True)
+
+    # --- Состояние диалога записи (Фаза 3, слот-филлинг) ---
+    # Стадия записи: none → collecting → ready. Хранится на диалоге, чтобы между
+    # входящими сообщениями не терять, что мы уже спросили и что уже собрали.
+    booking_stage = models.CharField(
+        "Стадия записи",
+        max_length=16,
+        choices=BookingStage.choices,
+        default=BookingStage.NONE,
+    )
+    # Черновик собранных слотов заявки. Ключи: service, preferred_date_raw,
+    # preferred_time_raw, preferred_date, preferred_time, customer_name
+    # (+ служебный _miss_count — счётчик нерелевантных ответов для анти-тупика).
+    booking_draft = models.JSONField("Черновик заявки", default=dict, blank=True)
 
     created_at = models.DateTimeField("Создан", auto_now_add=True)
     updated_at = models.DateTimeField("Обновлён", auto_now=True)

@@ -11,7 +11,9 @@ ENV:
 """
 from __future__ import annotations
 
+import base64
 import logging
+from typing import Optional
 
 import requests
 
@@ -91,17 +93,91 @@ class EvolutionWhatsAppProvider(WhatsAppProvider):
         logger.info("[evolution] отправлено, message_id=%s", message_id)
         return SendResult(success=True, message_id=message_id, raw=data)
 
-    def download_media(self, media_id: str) -> MediaFile:
-        """Скачать медиа (голос/фото) по идентификатору.
+    def download_voice_media(
+        self, message_key_id: str
+    ) -> Optional[tuple[bytes, str]]:
+        """Скачать голосовое аудио из Evolution API по идентификатору сообщения.
 
-        TODO (Фаза 2): уточнить формат. В Evolution API медиа достаётся через
-        POST /chat/getBase64FromMediaMessage/{instance} с телом, содержащим
-        сам объект message (а не просто media_id). Здесь нужно будет либо
-        принимать base64 прямо из вебхука, либо хранить message-объект.
-        Пока формат не зафиксирован — поднимаем явную ошибку, чтобы не
-        делать вид, что работает.
+        Evolution сам расшифровывает медиа WhatsApp и возвращает base64.
+        Ручную крипту (libsignal) не используем.
+
+        Returns:
+            (audio_bytes, mimetype) или None, если медиа недоступно/ошибка.
+        """
+        url = f"{self._base_url}/chat/getBase64FromMediaMessage/{self._instance}"
+        payload = {
+            "message": {"key": {"id": message_key_id}},
+            "convertToMp4": False,
+        }
+
+        logger.info(
+            "[evolution] запрос медиа message_key_id=%s (instance=%s)",
+            message_key_id,
+            self._instance,
+        )
+        try:
+            resp = requests.post(
+                url, json=payload, headers=self._headers, timeout=_TIMEOUT
+            )
+            resp.raise_for_status()
+        except requests.HTTPError as exc:
+            logger.warning(
+                "[evolution] медиа недоступно (HTTP %s) для message_key_id=%s: %s",
+                exc.response.status_code if exc.response is not None else "?",
+                message_key_id,
+                exc,
+            )
+            return None
+        except requests.RequestException as exc:
+            logger.error(
+                "[evolution] ошибка сети при скачивании медиа message_key_id=%s: %s",
+                message_key_id,
+                exc,
+            )
+            return None
+
+        try:
+            data = resp.json()
+        except ValueError:
+            logger.error(
+                "[evolution] не удалось разобрать JSON ответа для message_key_id=%s",
+                message_key_id,
+            )
+            return None
+
+        b64 = data.get("base64") if isinstance(data, dict) else None
+        if not b64:
+            logger.warning(
+                "[evolution] пустой base64 для message_key_id=%s (медиа просрочено?)",
+                message_key_id,
+            )
+            return None
+
+        try:
+            audio_bytes = base64.b64decode(b64)
+        except Exception as exc:
+            logger.error(
+                "[evolution] ошибка декодирования base64 для message_key_id=%s: %s",
+                message_key_id,
+                exc,
+            )
+            return None
+
+        mimetype: str = data.get("mimetype") or "audio/ogg"
+        logger.info(
+            "[evolution] медиа получено: %d байт, mimetype=%s",
+            len(audio_bytes),
+            mimetype,
+        )
+        return audio_bytes, mimetype
+
+    def download_media(self, media_id: str) -> MediaFile:
+        """Скачать медиа по media_id (общий интерфейс провайдера).
+
+        Для голосовых используй download_voice_media(message_key_id).
+        Этот метод требует message-объект, а не просто id — см. download_voice_media.
         """
         raise NotImplementedError(
-            "download_media для Evolution появится в Фазе 2 (голосовые). "
-            "Нужно зафиксировать формат medi-объекта из вебхука."
+            "Используй download_voice_media(message_key_id) для Evolution. "
+            "download_media с чистым media_id не поддерживается провайдером."
         )

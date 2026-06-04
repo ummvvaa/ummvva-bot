@@ -14,5 +14,8 @@ class ClinicAdmin(admin.ModelAdmin):
         ("Контент для бота", {
             "fields": ("services_json", "working_hours", "address", "tone", "faq"),
         }),
+        ("Уведомления о заявках", {
+            "fields": ("manager_whatsapp", "notifications_enabled"),
+        }),
         ("Служебное", {"fields": ("created_at", "updated_at")}),
     )

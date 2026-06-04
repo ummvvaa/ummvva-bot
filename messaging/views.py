@@ -71,5 +71,6 @@ def whatsapp_webhook(request):
         customer_phone=incoming.customer_phone,
         text=incoming.text,
         external_id=incoming.external_id,
+        message_type=incoming.message_type,
     )
     return Response({"status": "accepted"}, status=200)

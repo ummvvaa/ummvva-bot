@@ -1,25 +1,314 @@
 # Progress Log — ummvva-bot
 
 ## Текущий статус
-🟢 Фаза 1 закрыта — текстовый бот на одну клинику проверен end-to-end с реальными ключами:
-- AI_PROVIDER=groq (llama-3.3-70b-versatile) — работает, отвечает по данным клиники.
-- WHATSAPP_PROVIDER=mock (Evolution-инстанс не поднят — нет ENV-credentials).
-- Готов к Фазе 2 (голосовые через Whisper).
+🟢 Фаза 1 закрыта — текстовый бот на одну клинику проверен end-to-end с реальными ключами.
+🟢 Фаза 2 закрыта — голосовой пайплайн проверен end-to-end на mock.
+🟢 Фаза 3 ЗАКРЫТА — заявки на запись + уведомление менеджера:
+- Сбор заявки (слот-филлинг): услуга/день/время, анти-тупик, дедуп ✓
+- Уведомление менеджера через WhatsApp (mock/Evolution) ✓
+- Подтверждение/отказ менеджером: «+N»/«-N» через WhatsApp или руками в admin ✓
+- Автоответ пациенту при решении менеджера (confirmed/rejected) ✓
+- Admin-actions: «Подтвердить выбранные» / «Отклонить выбранные» с уведомлением пациентов ✓
+- seed_booking_demo: демо-заявки в разных статусах для проверки admin ✓
+- test_booking_flow: сквозной e2e на mock, 14/14 проверок ✓, чеклист для реального теста ✓
+- 38/38 pytest зелёных ✓
 
-**Статус Evolution-интеграции:** код EvolutionWhatsAppProvider готов и корректен;
+**Статус Evolution-интеграции:** код EvolutionWhatsAppProvider готов;
 для реального теста нужно заполнить .env: EVOLUTION_API_URL, EVOLUTION_API_KEY,
 EVOLUTION_INSTANCE (см. CLAUDE.md, раздел «Evolution API (WhatsApp для MVP)»).
 
 ## Дорожная карта
 - [x] Фаза 0 — Каркас: Django + Celery + Postgres + mock-провайдеры + модель Clinic
 - [x] Фаза 1 — Текстовый бот на одну клинику (реальный Groq, webhook, обработка)
-- [ ] Фаза 2 — Голосовые сообщения (Whisper через Groq)
-- [ ] Фаза 3 — Заявки на запись + уведомление менеджера
+- [x] Фаза 2 — Голосовые сообщения (Whisper через Groq)
+- [x] Фаза 3 — Заявки на запись + уведомление менеджера
 - [ ] Фаза 4 — Мультитенант (много клиник на одном сервере)
 - [ ] Фаза 5 — Биллинг (месячный тариф)
 - [ ] Фаза 6 — Прод (Meta Cloud API, деплой, мониторинг)
 
 ## Завершённые промпты
+### Промпт #7 — Фаза 3: финализация (admin-actions, seed, E2E test_booking_flow) — ✅ 2026-06-04
+- [x] **BookingRequestAdmin** доведён до рабочего инструмента менеджера:
+      • `action_confirm_selected` / `action_reject_selected` — bulk-actions вызывают
+        `apply_manager_decision` для каждой выбранной заявки (only new/notified),
+        пациент получает уведомление; уже закрытые пропускаются с сообщением «N пропущено».
+      • `list_display` + `preferred_date_display` (дата + время как сказал пациент),
+        `date_hierarchy`, кликабельные ссылки `list_display_links`.
+      • `manager_note` — редактируемый в детальном виде (единственное изменяемое поле
+        помимо `status`); телефон/имя — readonly-расшифровка.
+- [x] **`seed_booking_demo`** (management-команда) — находит «Жемчуг Дент» (77001112233),
+      выставляет `manager_whatsapp=77089998877`, создаёт 4 демо-заявки в статусах
+      new / notified / confirmed / rejected. Флаг `--force` пересоздаёт.
+- [x] **`test_booking_flow`** (management-команда) — сквозной E2E на mock, офлайн:
+      • Шаг 1: пациент «хочу записаться на чистку завтра в 3» → mock-AI извлекает все слоты
+        → создаётся 1 заявка (new→notified) → менеджер получает «🦷 Новая заявка #N»
+        → пациент получает «Передал заявку администратору» (НЕ «вы записаны»).
+      • Шаг 2: менеджер «+N» → статус notified→confirmed → пациент получает «✅ подтверждена»
+        (НЕ «вы записаны»); менеджер получает «Готово: заявка #N подтверждена».
+      • 14/14 проверок зелёных; печатает чеклист ручного теста на реальном Evolution API.
+- [x] **pytest 38/38** зелёных, `check` — 0 issues.
+
+### Промпт #6 — Фаза 3: замыкание цикла (решение менеджера → уведомление пациента) — ✅ 2026-06-04
+- [x] **Маршрутизация менеджера (КРИТИЧНО):** в `messaging/tasks.py::handle_incoming_message`
+      добавлен шаг 0a — ДО любой пациентской обработки (голос/диалог/запись) проверяем,
+      не является ли отправитель (`customer_phone`) менеджером какой-то клиники
+      (`Clinic.manager_whatsapp == customer_phone`, `is_active=True`). Если да →
+      ведём по ветке менеджера и `return` (новую переписку/заявку НЕ заводим).
+- [x] **Ветка менеджера** — новый модуль `bookings/manager.py`:
+      • `parse_manager_command(text) -> (decision, booking_id, note)|None` — regex:
+        «+{id}» / «подтверждаю {id}» → confirm; «-{id}» / «отклоняю {id}» → reject;
+        текст после номера → `note` (напр. «+12 приходите к 16:00» → note=«приходите к 16:00»).
+      • `apply_manager_decision(booking, decision, note=None)` — общая функция:
+        confirm→status=confirmed, reject→status=rejected, сохраняет `manager_note`
+        (только если note непустой), триггерит `notify_customer.delay(booking.id)`.
+      • `handle_manager_message(clinic, text) -> str|None` — проверка принадлежности:
+        `booking.clinic_id != clinic.id` → игнор + лог (None, ничего не шлём, не даём
+        менеджеру трогать чужие заявки). Неизвестная команда → подсказка по формату.
+        Несуществующая заявка → «Заявка #N не найдена».
+- [x] **Celery-задача `notify_customer(booking_id)`** в `bookings/tasks.py`:
+      confirmed → «✅ Ваша заявка в «{clinic}» подтверждена: {услуга}, {день} {время}.
+      {manager_note}. Ждём вас!»; rejected → «По заявке в «{clinic}» администратор
+      предложил уточнить время: {manager_note или 'свяжется с вами'}.» (мягко, без
+      негатива). Иной статус → ничего не шлём. Ретрай на `requests.RequestException`
+      (exponential backoff, макс. 3), как у `notify_manager`.
+- [x] **Путь (Б) — admin:** `BookingRequestAdmin.save_model` шлёт `notify_customer`
+      ровно один раз при смене статуса на confirmed/rejected (`"status" in
+      form.changed_data and obj.status in {confirmed, rejected}`). Без двойной отправки:
+      admin и WhatsApp — разные точки входа, не пересекаются (admin сюда, WhatsApp —
+      через `apply_manager_decision`).
+- [x] **Фазы 1–2 не сломаны:** обычные пациентские сообщения (текст/голос/вопросы/
+      запись) работают как раньше; меняется только то, что сообщения от
+      `manager_whatsapp` уходят в ветку менеджера.
+- [x] **Тесты** — `bookings/test_manager.py`, 7 шт. (MockProvider, офлайн):
+      «+{id}» → confirmed, пациенту одно подтверждение, новая переписка/заявка не
+      создана; «+{id} note» → note сохранён и попал пациенту; «-{id}» → rejected +
+      мягкий отказ; менеджер чужой клиники → игнор, статус не меняется; неизвестная
+      команда → подсказка; admin-смена статуса → `notify_customer` вызван один раз
+      (правка только заметки → не вызван); обычное пациентское сообщение → пациентский
+      флоу. Полный прогон — **38/38 зелёных**, `check` — 0 issues. Worker перезапущен
+      (`notify_customer` зарегистрирована).
+
+### Промпт #5 — Фаза 3: Celery-задача notify_manager (уведомление менеджера) — ✅ 2026-06-04
+- [x] `bookings/tasks.py::notify_manager(booking_id)` — `@shared_task(bind=True, max_retries=3)`:
+      • грузит `BookingRequest.select_related("clinic")`;
+      • если `clinic.notifications_enabled == False` или `manager_whatsapp` пуст →
+        логирует «уведомления выключены / нет номера менеджера» и выходит (status="new");
+      • формирует сообщение: «🦷 Новая заявка #{id} — {clinic.name}\nУслуга: {service}\n
+        Желаемо: {preferred_date_raw} {preferred_time_raw}\nПациент: {name}, {phone}\n
+        Ответьте: "+{id}" чтобы подтвердить или "-{id}" чтобы отклонить.»;
+      • отправляет через `get_whatsapp_provider()` на `clinic.manager_whatsapp`;
+      • при успехе → `status="notified"`, save;
+      • на `requests.RequestException` → `self.retry(countdown=2**retries)`, макс. 3 попытки;
+        при `MaxRetriesExceededError` — логирует ошибку, status остаётся "new";
+      • на прочие исключения — логирует, не роняет задачу.
+- [x] `messaging/tasks.py` — удалена синхронная `_notify_manager`; оба вызова
+      заменены на `notify_manager.delay(booking.id)`. Добавлен импорт из `bookings.tasks`.
+- [x] **Тесты** — `bookings/test_notify.py`, 3 шт. (MockProvider, офлайн):
+      • заявка с `manager_whatsapp` → провайдер получил один вызов с `#id` и услугой,
+        status → "notified";
+      • `notifications_enabled=False` → send не вызывается, status="new";
+      • `manager_whatsapp=None` → send не вызывается, без падения.
+      Полный прогон — **31/31 зелёных**, `check` — 0 issues.
+
+### Промпт #4 — Фаза 3: создание заявки из черновика + встройка в Celery-флоу — ✅ 2026-06-04
+- [x] `config/settings.py` — добавлен `BOOKING_DEDUP_MINUTES` (env, дефолт 30).
+- [x] `bookings/flow.py::finalize_booking(conversation, clinic) -> BookingRequest`:
+      • Собирает `BookingRequest` из `conversation.booking_draft`: `customer_phone`
+        (из диалога), `service`, `preferred_date_raw/time_raw`, `preferred_date/time`
+        (из isoformat-строк в черновике), `customer_name`; `status="new"`.
+      • Дедупликация: если в последние `BOOKING_DEDUP_MINUTES` уже есть заявка
+        от этого диалога со статусом `new`/`notified` — обновляет её (не создаёт дубль).
+      • После создания/обновления сбрасывает `booking_stage → none`, `booking_draft → {}`.
+- [x] `messaging/tasks.py` — booking-флоу встроен в `handle_incoming_message` между
+      шагом «сохранить входящее сообщение» и шагом «AI-генерация»:
+      • `str + stage=collecting` → уточняющий вопрос, AI-флоу НЕ вызывается;
+      • `str + stage=ready` → анти-тупик: `finalize_booking()` + уведомить менеджера
+        + отправить возвращённый текст;
+      • `None + stage=ready` → `finalize_booking()` + уведомить менеджера + реплика
+        «Спасибо! Передал заявку администратору клиники…» (НЕ «вы записаны»);
+      • `None + stage=none` → штатный AI-флоу Фазы 1 (без изменений).
+- [x] `_notify_manager(booking, clinic)` в tasks.py: отправляет менеджеру
+      `Clinic.manager_whatsapp` уведомление через абстракцию `WhatsAppProvider`
+      (если `notifications_enabled`), ставит `booking.status = notified`. Ошибка
+      уведомления логируется, задача не падает.
+- [x] Голосовой и текстовый флоу Фаз 1–2 не сломаны (запись — надстройка поверх).
+- [x] **Тесты** — `bookings/test_finalize.py`, 3 шт. (MockProvider, офлайн):
+      • готовый черновик → `finalize_booking` создаёт ровно одну `BookingRequest`,
+        все слоты записаны (в т.ч. ПДн через шифрование), stage сброшен, draft пуст;
+      • повторный `finalize` в окне дедупа → вторая заявка НЕ создаётся, первая
+        обновляется новыми данными;
+      • вопрос о цене → `BookingRequest` не создаётся, ответ AI сохранён в БД.
+      Полный прогон — **28/28 зелёных**, `check` — 0 issues.
+
+### Промпт #13.2.5 — Фаза 3: диалог записи (слот-филлинг) — ✅ 2026-06-04
+- [x] `Conversation` получил состояние записи: `booking_stage` (CharField choices
+      `none`/`collecting`/`ready`, default `none`) и `booking_draft` (JSONField,
+      default=dict). Миграция `messaging/0002_*`, `migrate` + `check` чисто.
+- [x] `bookings/flow.py::handle_booking_turn(conversation, incoming_text, clinic,
+      ai=None) -> str|None` — слот-филлинг:
+      • вызывает `extract_booking_intent` на входящем;
+      • если `stage=none` и `wants_booking=false` → `None` (не запись, обычный
+        флоу Фазы 1, состояние не трогаем);
+      • иначе сливает новые слоты в `booking_draft` (новое НЕ затирает собранное
+        пустым), парсит дату/время best-effort (`parse_when`, raw храним всегда);
+      • первый недостающий слот в порядке услуга → день → время → вежливый вопрос
+        ровно про ОДИН пункт, `stage=collecting`;
+      • всё собрано → `stage=ready`, `None` (сигнал #4 создать заявку).
+- [x] Собираем МАКСИМУМ 3 поля (услуга/день/время), имя опционально, телефон не
+      спрашиваем (известен из номера WhatsApp). Не анкета.
+- [x] Анти-тупик: 2 нерелевантных ответа подряд (`_MAX_MISSES=2`, счётчик
+      `_miss_count` в draft) → `stage=ready` с тем, что есть, и реплика «передам
+      администратору, перезвонит и уточнит детали». Без бесконечного переспроса.
+      Промах считается только если уже `collecting` (значит спрашивали) и новый
+      слот не пришёл; старт записи промахом не считается.
+- [x] ПРАВИЛО подтверждения зафиксировано в докстринге `flow.py`: при готовом
+      черновике бот НЕ говорит «вы записаны»; реплику соберёт #4 как «передаю
+      заявку администратору». Контракт возврата (None/str × stage) описан там же.
+- [x] `MockAIProvider.generate(json_mode=True)` расширен: помимо `wants_booking`
+      по маркерам теперь грубо извлекает услугу (по основам слов из прайса), день
+      (по маркерам) и время (по числу часов) — чтобы офлайн прогнать весь слот-флоу.
+- [x] **Тесты** — `bookings/test_flow.py`, 4 шт. (MockProvider, офлайн): полный
+      сбор «хочу записаться»→услуга→день→время→ready; вопрос о цене → None;
+      частичная «запишите на чистку завтра» → спрашивает только время; анти-тупик
+      (2 промаха → ready + handoff с частичными данными). Полный прогон — 25/25
+      зелёных, `check` — 0 issues.
+
+### Промпт #13.2 — Фаза 3: распознавание намерения записи + парсинг слотов — ✅ 2026-06-04
+- [x] `json_mode` проброшен через абстракцию AI: `AIProvider.generate(messages, clinic,
+      json_mode=False)` (base) + реализации `mock` и `groq`. В Groq при `json_mode=True`
+      добавляется `response_format={"type":"json_object"}` (слово «json» в промпте
+      извлечения присутствует — Groq этого требует). Старые вызовы `generate(messages,
+      clinic)` не сломаны (дефолт `json_mode=False`).
+- [x] `MockAIProvider.generate` в `json_mode` отдаёт детерминированный валидный JSON;
+      намерение определяет по маркерам (`запиш`, `жазыл`, `прийти`...) — для офлайн-тестов.
+      Вопрос о цене маркеров не содержит → `wants_booking=false`.
+- [x] `bookings/extraction.py`:
+      • `extract_booking_intent(text, clinic, ai=None) -> dict` — системный промпт
+        извлечения собирается из услуг клиники (переиспользует `_format_services` из
+        Фазы 1), модель просят вернуть СТРОГО JSON (`json_mode=True`). Результат —
+        всегда dict с ключами `wants_booking|service|preferred_date_raw|
+        preferred_time_raw|customer_name`. Кривой JSON / исключение провайдера →
+        логируем + безопасный fallback (`wants_booking=False`), наружу исключение НЕ
+        пробрасываем (флоу не падает). `ai` инъектируется для тестов, по умолчанию —
+        фабрика.
+      • `parse_when(date_raw, time_raw, today=None) -> (date|None, time|None)` —
+        best-effort: «завтра»/«ертен» → +1, «сегодня»/«бугин» → today,
+        «послезавтра»/«арги кун» → +2, дни недели (рус + каз русскими буквами) →
+        ближайшая будущая дата; время: HH:MM, «сагат 3»/«в 15»/«3-ке», числительные
+        словами («к трём»). Не распарсил уверенно → None (raw хранит BookingRequest).
+        НЕ выдумываем дату.
+- [x] **Тесты (pytest, MockProvider, офлайн)** — `bookings/test_extraction.py`, 16 шт.,
+      все зелёные: dict с нужными ключами + булев `wants_booking`; намерение (рус/каз)
+      vs вопрос о цене; кривой JSON и исключение провайдера → fallback без падения;
+      `parse_when` для «завтра»/«ертен»/«сегодня»/дня недели (рус+каз)/«15:00»/«3-ке»/
+      «к трём» и мусора (None, None). Полный прогон — 21/21 зелёных, `check` — 0 issues.
+
+### Промпт #13.1 — Фаза 3 (старт): приложение bookings + модель BookingRequest — ✅ 2026-06-04
+- [x] Создано Django-приложение `bookings` (зарегистрировано в `INSTALLED_APPS`).
+- [x] Модель `bookings.BookingRequest`:
+      • `clinic` FK→Clinic (CASCADE, related_name="bookings", indexed) — мультитенант.
+      • `conversation` FK→messaging.Conversation (SET_NULL, null=True) — заявку не
+        теряем, даже если переписку удалят (запрос на удаление ПДн).
+      • `customer_phone` = `EncryptedCharField` (ПДн, шифротекст в БД).
+      • `customer_name` = `EncryptedCharField`, null=True (пациент может не назваться).
+      • `service` / `preferred_date_raw` / `preferred_time_raw` — CharField (НЕ ПДн,
+        не шифруем — удобно фильтровать в admin).
+      • `preferred_date` (DateField) / `preferred_time` (TimeField), null=True —
+        распарсенные значения, если разбор удался.
+      • `status` choices: new / notified / confirmed / rejected / cancelled,
+        default="new", indexed.
+      • `manager_note` (TextField, null=True), `created_at` / `updated_at`.
+- [x] В `Clinic` добавлены поля уведомления менеджера: `manager_whatsapp`
+      (CharField, null=True) и `notifications_enabled` (BooleanField, default=True).
+      Выведены в admin (фишсет «Уведомления о заявках»).
+- [x] `bookings.admin.BookingRequestAdmin`:
+      • list_display: clinic, service, preferred_date_raw, preferred_time_raw, status, created_at.
+      • list_filter: clinic, status, created_at.
+      • ПДн (телефон/имя) — readonly, видны только в детальном просмотре (в списке нет).
+      • Менеджер правит только `status` и `manager_note`; `has_add_permission=False`
+        (заявки создаёт бот, не человек руками).
+- [x] Миграции: `clinics.0002_*` (поля менеджера) + `bookings.0001_initial`.
+      `migrate` прошёл чисто, `manage.py check` — 0 issues.
+- [x] **Тесты (pytest, на mock, без сети)** — `bookings/test_models.py`, 5 шт., все зелёные:
+      создание/чтение заявки; default status="new"; nullable имя; миграции чисты
+      (`makemigrations --check`); **шифрование**: `customer_phone` в БД лежит
+      Fernet-токеном (`gAAAA...`, открытого номера нет — проверка сырым SQL-курсором),
+      через ORM читается в открытом виде.
+- [x] Добавлены `pytest==8.3.4` + `pytest-django==4.9.0` в requirements.txt и
+      `pytest.ini` (`DJANGO_SETTINGS_MODULE=config.settings`). В работающем
+      контейнере доустановлены через pip (на rebuild подтянутся из requirements).
+- [x] CLAUDE.md: добавлен раздел «Заявки на запись (Фаза 3)» с ГЛАВНЫМ ПРАВИЛОМ
+      (бот не подтверждает запись сам — только собирает и передаёт менеджеру).
+
+### Промпт #12 — End-to-end верификация Фазы 2 + edge-кейсы голосового — ✅ 2026-06-04
+- [x] `messaging/management/commands/test_voice.py` — 3 сценария на mock-провайдерах, eager Celery:
+      • Тест 1 (нормальный поток): audioMessage → download_voice_media → transcribe → текст →
+        build_messages → generate → send. В БД: user(транскрипт) + assistant. Mock отправил ответ. ✓
+      • Тест 2 (просроченное медиа): download_voice_media → None → ранний выход (до поиска клиники),
+        диалог НЕ создан, клиенту отправлен `_VOICE_FAIL_REPLY`. ✓
+      • Тест 3 (короткое/тихое голосовое, pttMessage): transcribe → None → ранний выход,
+        диалог НЕ создан, клиенту `_VOICE_FAIL_REPLY`. ✓
+- [x] В логах Теста 1 зафиксировано: `[tasks] голосовое распознано ... '[mock-транскрипт]'` —
+      транскрипт попадает в лог до передачи в текстовый пайплайн. ✓
+- [x] Фаза 2 закрыта; `[x]` в дорожной карте проставлен.
+- [x] `manage.py check` — 0 issues (неявно, структура не менялась).
+
+### Промпт #11 — Голосовой пайплайн: ветка audioMessage в Celery-таске — ✅ 2026-06-04
+- [x] `providers/whatsapp/base.py` — в интерфейс `WhatsAppProvider` добавлен
+      абстрактный `download_voice_media(message_key_id) -> tuple[bytes, str] | None`
+      (скачивание голоса идёт через абстракцию, не напрямую).
+- [x] `providers/whatsapp/mock.py::MockWhatsAppProvider.download_voice_media` —
+      заглушка `(b"mock-audio-bytes", "audio/ogg")` для тестов без интернета.
+      (В `EvolutionWhatsAppProvider` метод уже был — Промпт #9.)
+- [x] `messaging/webhook_parser.py` — `IncomingMessage` получил поле
+      `message_type` (дефолт `"conversation"`). Парсер распознаёт голос
+      (`audioMessage`/`pttMessage`): пропускает с пустым `text`, но требует
+      `external_id` (= `key.id`, нужен для скачивания). Текстовые без текста —
+      по-прежнему `None`. `external_id` уже нёс `key.id`, отдельное поле не плодил.
+- [x] `messaging/views.py` — в `handle_incoming_message.delay(...)` пробрасывается
+      `message_type`.
+- [x] `messaging/tasks.py::handle_incoming_message` — новый параметр
+      `message_type="conversation"`. Ветка (шаг 0) для голосовых ДО общего потока:
+      `download_voice_media(external_id)` → если `None`, ответить клиенту
+      «Не смог разобрать голосовое, повтори текстом, пожалуйста» и выйти;
+      `transcribe(audio_bytes, mimetype)` → если пусто, тот же ответ + выход;
+      залогировать транскрипт; `text = transcript` и провалиться в ШТАТНЫЙ
+      текстовый пайплайн (шаги 1–8 без изменений — логика ответа НЕ скопирована).
+      `text` стал необязательным (`""`), чтобы голос приходил без текста.
+- [x] Проверено в Docker (mock-провайдеры, eager Celery):
+      • текстовый путь `test_webhook` — зелёный (ничего не сломалось);
+      • голос: парс audioMessage → download → transcribe → user(транскрипт) +
+        assistant + отправка клиенту — OK;
+      • голос-фейл: `download_voice_media`→None → клиенту извинение, диалог НЕ
+        создан, пайплайн не запущен — OK.
+      • `manage.py check` — 0 issues.
+
+### Промпт #10 — transcribe в AIProvider (Whisper через Groq) — ✅ 2026-06-04
+- [x] `providers/ai/base.py::AIProvider.transcribe(audio_bytes, mimetype) -> str | None`:
+      сигнатура изменена: вместо `language` принимает `mimetype` (MIME-тип аудио),
+      возвращает `str | None` вместо `str` (None при ошибке).
+- [x] `providers/ai/groq.py::GroqAIProvider.transcribe`:
+      • модель `whisper-large-v3`, `language="ru"` (хардкод — лучшее качество для ru).
+      • файл передаётся как `("voice.ogg", audio_bytes)` — Groq принимает ogg/opus напрямую.
+      • использует уже созданный `self._client` (тот же ключ, что и для текста).
+      • при любом исключении: `logger.error` + возвращает `None` (бот не падает).
+- [x] `providers/ai/mock.py::MockAIProvider.transcribe`:
+      сигнатура обновлена, возвращает `"[mock-транскрипт]"`.
+- [x] `ast.parse` всех трёх файлов в Docker — OK.
+
+### Промпт #9 — download_voice_media в EvolutionWhatsAppProvider — ✅ 2026-06-04
+- [x] `providers/whatsapp/evolution.py::EvolutionWhatsAppProvider.download_voice_media(message_key_id)`:
+      • `POST {EVOLUTION_API_URL}/chat/getBase64FromMediaMessage/{EVOLUTION_INSTANCE}`
+        заголовок `apikey`, тело `{"message": {"key": {"id": message_key_id}}, "convertToMp4": false}`.
+      • Из ответа берёт `base64`, декодирует в bytes, возвращает `(audio_bytes, mimetype)`.
+      • Ошибки (HTTPError — 404/403, пустой base64, ошибка сети, битый JSON) —
+        логируются, возвращается `None`. Бот не падает.
+      • Импорты `base64` и `Optional` добавлены в модуль.
+      • Существующая заглушка `download_media` сохранена (бросает NotImplementedError
+        с подсказкой использовать download_voice_media).
+- [x] `py_compile` / `ast.parse` в Docker — OK.
+- [ ] Ручной тест с реальным Evolution-инстансом — ждёт заполнения ENV.
+
 ### Промпт #1.8 — Финальная верификация Фазы 1 + git commit — ✅ 2026-06-02
 
 Проверен полный цикл с реальными ключами (AI_PROVIDER=groq, WHATSAPP_PROVIDER=mock):
@@ -222,17 +511,18 @@ EVOLUTION_INSTANCE (см. CLAUDE.md, раздел «Evolution API (WhatsApp дл
 - [x] Celery worker поднимается и коннектится к Redis
 
 ## Текущий промпт
-### Промпт #2 — Фаза 2: голосовые сообщения (Whisper через Groq)
+### Промпт #8 — Фаза 4: мультитенант (много клиник на одном сервере)
 
-Нужно:
-1. Зафиксировать формат audio/voice объекта в payload Evolution (поле `messageType=audioMessage` или `pttMessage`, base64 в `data`).
-2. Реализовать `EvolutionWhatsAppProvider.download_media()` — получить байты аудио из webhook-payload или через `POST /chat/getBase64FromMediaMessage/{instance}`.
-3. Реализовать `GroqAIProvider.transcribe(audio_bytes, language)` — Whisper через Groq SDK (`client.audio.transcriptions.create`).
-4. В `webhook_parser.py` — расширить `parse_evolution_payload` для голосовых: определять `messageType=pttMessage/audioMessage`, возвращать `IncomingMessage` с флагом `is_voice=True` и `media_id`.
-5. В `messaging/tasks.py` — если `is_voice`, скачать медиа → транскрибировать → дальше тот же поток текста.
-6. Добавить `Message.is_transcribed` (bool) для аудитной отметки в admin.
-
-Опционально перед Фазой 2: поднять Evolution-инстанс и проверить реальную отправку (заполнить EVOLUTION_API_URL/KEY/INSTANCE в .env).
+Фаза 3 полностью закрыта. Следующие шаги — Фаза 4 (мультитенант):
+- Проверить, что маршрутизация по `Clinic.whatsapp_number` работает корректно
+  при нескольких клиниках в БД (webhook → tasks → правильная клиника).
+- Убедиться, что webhook-токены можно задавать per-clinic (или одного глобального
+  достаточно для MVP).
+- Расширить `seed_demo_clinic` или добавить `seed_second_clinic` для тестирования
+  изоляции данных между клиниками.
+- Проверить изоляцию: сообщения клиники A не видны в admin клиники B.
+- Изоляция заявок: менеджер клиники A не трогает заявки клиники B (уже реализовано
+  в bookings/manager.py, добавить тест с двумя клиниками сразу).
 
 ## Что должно быть сделано (Фаза 1) — план
 - [x] Модели переписки + шифрование контента (см. Промпт #1.2). Сделано через
@@ -261,6 +551,77 @@ EVOLUTION_INSTANCE (см. CLAUDE.md, раздел «Evolution API (WhatsApp дл
   (SDK клиент создаётся без явного `base_url`, значение берётся из ENV).
 
 ## Решения и важные детали
+- **[Промпт #6] Сообщения от `manager_whatsapp` идут в ветку менеджера (НЕ как
+  пациент).** Проверка отправителя — первым шагом в `handle_incoming_message`, до
+  голоса/диалога/записи; новую переписку/заявку для менеджера не заводим. Команды
+  `+{id}`/`-{id}` (и «подтверждаю/отклоняю {id}»), текст после номера → `manager_note`.
+  Проверка принадлежности заявки клинике менеджера (`booking.clinic_id == clinic.id`),
+  иначе игнор + лог. `apply_manager_decision(booking, decision, note)` ставит статус
+  и триггерит `notify_customer` (Celery). Admin-смена статуса на confirmed/rejected
+  тоже уведомляет пациента — через `save_model` по `form.changed_data`, без дублей
+  (admin и WhatsApp — раздельные точки входа).**
+- **[Промпт #5] Уведомление менеджера — Celery-задача `notify_manager` через
+  WhatsApp-провайдер, status new→notified. Формат ответа менеджера: +{id}/-{id}.
+  Ретрай как у Groq: `requests.RequestException` → `self.retry(countdown=2**retries)`,
+  макс. 3 попытки. Выделена из `messaging/tasks.py` в `bookings/tasks.py` — уведомление
+  менеджера принадлежит доменной логике booking'а, а не HTTP-пайплайну.**
+- **[Промпт #4] `finalize_booking` создаёт `BookingRequest` из черновика, дедуп
+  окно `BOOKING_DEDUP_MINUTES=30`. Бот отвечает «передал заявку администратору»,
+  не «вы записаны». Уведомление менеджера через `WhatsAppProvider` (статус →
+  `notified`). Запись встроена перед Groq-флоу в Celery-обработчике: если
+  `handle_booking_turn` вернул None и stage=none — штатный AI-флоу без изменений.**
+- **[Промпт #13.2.5] Слот-филлинг в `bookings/flow.py`, состояние на
+  `Conversation`** (`booking_stage` + `booking_draft`). Собираем максимум
+  услуга/день/время, имя опционально, телефон не спрашиваем (известен из номера).
+  Анти-тупик: после 2 промахов отдаём менеджеру что есть. Бот не подтверждает
+  запись сам — реплика готового черновика (#4) звучит как «передаю заявку
+  администратору», НЕ «вы записаны» (зафиксировано в докстринге `flow.py`).
+  Mock-провайдер в json_mode теперь извлекает и слоты (не только намерение) —
+  для офлайн-прогона всего флоу.
+- **[Промпт #13.2] Намерение записи и слоты извлекаются через AIProvider в
+  JSON-режиме** (`bookings/extraction.py`). Вопрос о цене != заявка. Дату/время
+  парсим best-effort, при сомнении None — менеджер уточняет. `json_mode` проброшен
+  в абстракцию `generate()` (дефолт False, старые вызовы целы); Groq получает
+  `response_format=json_object`, mock отдаёт детерминированный JSON по маркерам.
+  Извлечение безопасно к сбоям: кривой JSON / падение провайдера → fallback
+  `wants_booking=False`, исключение наружу не идёт (флоу обработки не падает).
+- **[Промпт #13.1] Заявки на запись (Фаза 3).** Заявки в приложении `bookings`,
+  модель `BookingRequest`. ПДн пациента (телефон, имя) шифруются как в `Message`
+  (`EncryptedCharField`, в БД — Fernet-токен). Бот не подтверждает приём сам —
+  только собирает заявку и передаёт менеджеру (`manager_whatsapp` в `Clinic`).
+  Услугу/дату/время не шифруем (не ПДн, удобно фильтровать в admin). `conversation`
+  через `SET_NULL` — заявку не теряем при удалении переписки. Тесты — pytest
+  (`bookings/test_models.py`), на mock без сети.
+- **[2026-06-04] Казахский голос: `language="ru"` убран из `transcribe`.**
+  В `providers/ai/groq.py::GroqAIProvider.transcribe` параметр `language="ru"`
+  удалён из вызова `client.audio.transcriptions.create`. Теперь `whisper-large-v3`
+  сам определяет язык (ru/kk) — клиники в Казахстане, пациенты пишут и на русском,
+  и на казахском. Хардкод `ru` ломал распознавание казахской речи.
+- **[Промпт #11] Голос превращается в текст ДО входа в текстовый пайплайн.**
+  Ветка `audioMessage` в `handle_incoming_message` (шаг 0) только скачивает аудио
+  (`download_voice_media`) и расшифровывает (`transcribe`), затем кладёт транскрипт
+  в `text` и проваливается в ШТАТНЫЙ текстовый поток (шаги 1–8). Логика ответа
+  (роутинг клиники, история, generate, send, дедуп, fallback) НЕ дублируется —
+  голос переиспользует существующую обработку. Текстовая ветка не менялась.
+  `download_voice_media` поднят в интерфейс `WhatsAppProvider` (был только у
+  Evolution) — вызов идёт через абстракцию, mock получил заглушку.
+  `key.id` голосового берём из `external_id` (он и так нёс `key.id`) — отдельное
+  поле `message_key_id` не плодили; в `IncomingMessage` добавлено лишь
+  `message_type`. Дедуп голоса работает по тому же `external_id`; минус — ретрай
+  вебхука повторно скачает+расшифрует до проверки дедупа (приемлемо для MVP).
+- **[Промпт #10] Транскрипция через Groq Whisper.** Метод `transcribe(audio_bytes, mimetype) -> str | None`
+  добавлен в интерфейс `AIProvider`. Реализация в `GroqAIProvider`: модель `whisper-large-v3`,
+  язык `"ru"` хардкодом (лучшее качество для русского/казахского), файл передаётся как
+  `("voice.ogg", audio_bytes)` — ogg/opus Groq принимает без конвертации. Ключ тот же
+  (`GROQ_API_KEY`), что и для текстовой генерации. При ошибке — `logger.error` + `None`.
+  MockAIProvider возвращает `"[mock-транскрипт]"`.
+- **[Промпт #9] Медиа скачиваем через getBase64FromMediaMessage.** Evolution API
+  сам расшифровывает WhatsApp-медиа (Signal-крипту) и отдаёт чистый base64.
+  Ручную WhatsApp-крипту (libsignal, ключи из message-объекта) не трогаем.
+  Новый метод — `download_voice_media(message_key_id)` → `tuple[bytes, str] | None`;
+  он живёт рядом с `send_message` в `EvolutionWhatsAppProvider`. Стандартный
+  `download_media(media_id)` остался заглушкой — у Evolution нет «чистого»
+  media_id, всегда нужен `key.id` из сообщения.
 - **[Промпт #1.5] Маршрутизация входящего — по номеру-получателю.** В payload
   Evolution наш номер (получатель/владелец инстанса) лежит в верхнеуровневом
   `sender`; номер клиента — в `data.key.remoteJid`. По `sender` → ищем

@@ -47,6 +47,19 @@ class Clinic(models.Model):
 
     is_active = models.BooleanField("Активна", default=True)
 
+    # Куда уведомлять менеджера о новых заявках на запись (Фаза 3).
+    # Бот не подтверждает приём сам — он передаёт заявку на этот номер.
+    manager_whatsapp = models.CharField(
+        "WhatsApp менеджера",
+        max_length=32,
+        null=True,
+        blank=True,
+        help_text="Номер админа клиники (E.164) для уведомлений о заявках на запись",
+    )
+    notifications_enabled = models.BooleanField(
+        "Уведомления о заявках включены", default=True
+    )
+
     created_at = models.DateTimeField("Создана", auto_now_add=True)
     updated_at = models.DateTimeField("Обновлена", auto_now=True)
 

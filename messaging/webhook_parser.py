@@ -34,14 +34,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+# Типы messageType (Evolution), которые считаем голосовыми.
+VOICE_MESSAGE_TYPES = ("audioMessage", "pttMessage")
+
+
 @dataclass
 class IncomingMessage:
     """Извлечённые из webhook поля входящего сообщения."""
 
     clinic_number: str        # номер-получатель (наш номер клиники)
     customer_phone: str       # номер отправителя (клиент)
-    text: str                 # текст сообщения
-    external_id: str | None   # ID сообщения у провайдера (для дедупа)
+    text: str                 # текст сообщения (для голосового — пустой до транскрипции)
+    external_id: str | None   # ID сообщения у провайдера / key.id (дедуп + скачивание медиа)
+    message_type: str = "conversation"  # тип входящего (conversation, audioMessage, …)
 
 
 def _strip_jid(jid: str | None) -> str:
@@ -109,8 +114,18 @@ def parse_evolution_payload(payload: object) -> IncomingMessage | None:
 
     external_id = key.get("id") or None
 
-    # Без любого из обязательных полей обрабатывать нечего.
-    if not clinic_number or not customer_phone or not text:
+    message_type = data.get("messageType") or "conversation"
+    is_voice = message_type in VOICE_MESSAGE_TYPES
+
+    # Маршрутизация невозможна без номеров — отбрасываем.
+    if not clinic_number or not customer_phone:
+        return None
+    # Голосовое: текста ещё нет (транскрипция в Celery), но нужен key.id для скачивания.
+    if is_voice:
+        if not external_id:
+            return None
+    # Текстовое: без текста обрабатывать нечего.
+    elif not text:
         return None
 
     return IncomingMessage(
@@ -118,4 +133,5 @@ def parse_evolution_payload(payload: object) -> IncomingMessage | None:
         customer_phone=customer_phone,
         text=text,
         external_id=external_id,
+        message_type=message_type,
     )

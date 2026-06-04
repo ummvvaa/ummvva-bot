@@ -26,11 +26,26 @@ class GroqAIProvider(AIProvider):
         self._temperature: float = settings.GROQ_TEMPERATURE
         self._max_retries: int = settings.AI_MAX_RETRIES
 
-    def generate(self, messages: list[ChatMessage], clinic: "Clinic") -> str:
+    def generate(
+        self,
+        messages: list[ChatMessage],
+        clinic: "Clinic",
+        json_mode: bool = False,
+    ) -> str:
         import groq as groq_lib
 
         clinic_name = getattr(clinic, "name", "unknown")
-        logger.info("[groq] generate for %s, model=%s", clinic_name, self._model)
+        logger.info(
+            "[groq] generate for %s, model=%s, json_mode=%s",
+            clinic_name,
+            self._model,
+            json_mode,
+        )
+
+        # В json-режиме просим OpenAI-совместимый structured output. Groq требует,
+        # чтобы слово "json" встречалось в промпте (это обеспечивает наш системный
+        # промпт извлечения) — иначе API отклоняет response_format.
+        extra: dict = {"response_format": {"type": "json_object"}} if json_mode else {}
 
         last_exc: Exception | None = None
         for attempt in range(1, self._max_retries + 1):
@@ -39,6 +54,7 @@ class GroqAIProvider(AIProvider):
                     model=self._model,
                     messages=messages,  # type: ignore[arg-type]
                     temperature=self._temperature,
+                    **extra,
                 )
                 return completion.choices[0].message.content or ""
 
@@ -71,6 +87,13 @@ class GroqAIProvider(AIProvider):
 
         raise last_exc  # type: ignore[misc]
 
-    def transcribe(self, audio_bytes: bytes, language: str = "ru") -> str:
-        # Реализуется в Фазе 2 (Whisper через Groq).
-        raise NotImplementedError("transcribe появится в Фазе 2")
+    def transcribe(self, audio_bytes: bytes, mimetype: str) -> str | None:
+        try:
+            result = self._client.audio.transcriptions.create(
+                model="whisper-large-v3",
+                file=("voice.ogg", audio_bytes),
+            )
+            return result.text
+        except Exception as exc:
+            logger.error("[groq] transcribe failed: %s", exc)
+            return None

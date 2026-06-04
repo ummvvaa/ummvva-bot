@@ -32,3 +32,8 @@ class MockWhatsAppProvider(WhatsAppProvider):
             mime_type="audio/ogg",
             filename=f"{media_id}.ogg",
         )
+
+    def download_voice_media(self, message_key_id: str) -> tuple[bytes, str] | None:
+        logger.info("[mock-whatsapp] download_voice_media(%s)", message_key_id)
+        # Заглушка аудио — без интернета, для тестов голосовой ветки.
+        return b"mock-audio-bytes", "audio/ogg"

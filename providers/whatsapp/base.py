@@ -41,3 +41,13 @@ class WhatsAppProvider(ABC):
     def download_media(self, media_id: str) -> MediaFile:
         """Скачать медиафайл по его идентификатору от провайдера."""
         raise NotImplementedError
+
+    @abstractmethod
+    def download_voice_media(self, message_key_id: str) -> tuple[bytes, str] | None:
+        """Скачать голосовое аудио по ID входящего сообщения (key.id).
+
+        Возвращает `(audio_bytes, mimetype)` или `None`, если медиа недоступно
+        (просрочено, ошибка сети/декодирования). Реализация решает, как получить
+        байты у конкретного провайдера (для Evolution — getBase64FromMediaMessage).
+        """
+        raise NotImplementedError

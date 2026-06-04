@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     # Local
     "clinics",
     "messaging",
+    "bookings",
 ]
 
 MIDDLEWARE = [
@@ -154,6 +155,10 @@ EVOLUTION_INSTANCE = os.environ.get("EVOLUTION_INSTANCE", "")
 META_ACCESS_TOKEN = os.environ.get("META_ACCESS_TOKEN", "")
 META_PHONE_NUMBER_ID = os.environ.get("META_PHONE_NUMBER_ID", "")
 META_VERIFY_TOKEN = os.environ.get("META_VERIFY_TOKEN", "")
+
+# Окно дедупликации заявок на запись (минуты). Если за это время от того же диалога
+# уже есть заявка со статусом new/notified — обновляем её, не создаём дубль.
+BOOKING_DEDUP_MINUTES = int(os.environ.get("BOOKING_DEDUP_MINUTES", "30"))
 
 # --- Логирование (минимально, без персональных данных) ---
 LOGGING = {
