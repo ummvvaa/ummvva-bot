@@ -14,6 +14,9 @@
 - 38/38 pytest зелёных ✓
 
 🟡 Фаза 3 — уведомления клиника-зависимые: notify_manager/notify_customer через clinic-провайдер, тесты изоляции ✓
+🟢 Фаза 4 — изоляция данных ДОКАЗАНА (Промпт #8.5): 9 pytest (messaging/test_isolation.py)
+   + management-команда `test_multitenant_flow` (20 PASS, офлайн) покрывают все 5
+   пунктов изоляции. **66/66 pytest зелёных**, `check` — 0 issues.
 🟡 Фаза 4 (мультитенант) — В РАБОТЕ: данные (Промпт #8.1) + маршрутизация (#8.2):
 - Clinic расширена: `instance_name` (unique), `timezone` (default Asia/Almaty) ✓
 - FK `clinic` (on_delete=PROTECT) во всех доменных моделях: Conversation,
@@ -40,6 +43,34 @@ EVOLUTION_INSTANCE (см. CLAUDE.md, раздел «Evolution API (WhatsApp дл
 - [ ] Фаза 6 — Прод (Meta Cloud API, деплой, мониторинг)
 
 ## Завершённые промпты
+### Промпт #8.5 — Фаза 4: ДОКАЗАТЕЛЬСТВО изоляции данных тестами — ✅ 2026-06-05
+- [x] **`messaging/test_isolation.py`** — 9 pytest (MockProvider, офлайн), отдельный
+      суите-«доказательство» инвариантов мультитенанта. Две клиники с ЗАВЕДОМО
+      разными услугами/ценами/FAQ; один пациентский номер (`77009998877`) пишет в обе.
+      Пять пунктов:
+      1. **Маршрутизация:** входящее на инстанс/номер А → диалог+сообщения только в А
+         (`test_routing_message_to_a_lands_in_a`); зеркально для Б; неизвестный
+         номер/инстанс → 0 диалогов, 0 сообщений, ничего не отправлено, без падения
+         (`test_routing_unknown_number_creates_nothing`).
+      2. **Системный промпт:** `build_system_prompt(clinic_a)` содержит свои услугу/
+         цену/FAQ и НЕ содержит ни одной строки данных Б (имя клиники, услуга, цена,
+         FAQ, адрес) — проверка собранной строки; зеркально для Б.
+      3. **История диалога:** один номер в А и Б → два разных `Conversation`;
+         `get_history(conv_a)` не содержит реплик Б; `build_messages(clinic_a, ...)`
+         не тянет ни сообщения, ни услуги Б в контекст модели.
+      4. **Заявки:** `BookingRequest.objects.filter(clinic=clinic_b)` не содержит
+         заявку А (пусто); выборка А = ровно её заявка; `notify_manager` шлёт ровно
+         одно уведомление менеджеру А, менеджер Б не получает ничего.
+      5. **Прямой запрос:** `Message.objects.filter(clinic=clinic_a)` — все строки с
+         `clinic_id==A` и `conversation.clinic_id==A`; пересечение id-выборок А и Б пусто.
+- [x] **`messaging/management/commands/test_multitenant_flow.py`** — E2E на mock,
+      eager Celery, полностью офлайн. Прогоняет весь путь для ДВУХ клиник параллельно
+      (один номер пишет в обе) + неизвестный номер, печатает PASS/FAIL по каждому из
+      5 пунктов. `--keep` оставляет данные. Cleanup учитывает PROTECT (сносит
+      bookings→messages→conversations→clinics). **20/20 PASS.**
+- [x] **Прогон:** `pytest` — **66/66 зелёных** (было 57, +9); `test_multitenant_flow`
+      — 20 PASS; `manage.py check` — 0 issues.
+
 ### Промпт #8.4 — Фаза 4: Admin под мультитенант — ✅ 2026-06-05
 - [x] **`clinics/admin.py`** — `ClinicAdmin` расширен:
       • `list_display`: `(name, whatsapp_number, instance_name, is_active, updated_at)` ✓
