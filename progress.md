@@ -40,6 +40,35 @@ EVOLUTION_INSTANCE (см. CLAUDE.md, раздел «Evolution API (WhatsApp дл
 - [ ] Фаза 6 — Прод (Meta Cloud API, деплой, мониторинг)
 
 ## Завершённые промпты
+### Промпт #8.4 — Фаза 4: Admin под мультитенант — ✅ 2026-06-05
+- [x] **`clinics/admin.py`** — `ClinicAdmin` расширен:
+      • `list_display`: `(name, whatsapp_number, instance_name, is_active, updated_at)` ✓
+      • `list_editable = ("is_active",)` — переключатель активности прямо в списке;
+        `list_display_links = ("name",)` добавлен (нужен при использовании list_editable).
+      • `_PrettyJSONWidget` — Textarea с `format_value`, которая pretty-prints JSON
+        (`json.dumps(..., indent=2, ensure_ascii=False)`) перед рендером; подключён
+        через `formfield_overrides = {models.JSONField: {"widget": ...}}` для всех
+        трёх JSON-полей (`services_json`, `working_hours`, `faq`) разом.
+      • Fieldsets обновлены: `instance_name` и `timezone` добавлены в «Основное».
+      • `search_fields` расширен: добавлен `instance_name`.
+- [x] **`messaging/admin.py`** — `MessageAdmin` и `ConversationAdmin` улучшены:
+      • `MessageAdmin.list_display`: добавлен прямой `clinic` (Message имеет FK
+        `clinic` с Фазы 4, раньше шёл через `conversation__clinic`).
+      • `MessageAdmin.list_filter`: `("clinic", "role")` — прямой FK вместо
+        `conversation__clinic`; чище и быстрее (без JOIN).
+      • `MessageAdmin.readonly_fields`: добавлен `clinic`.
+      • `ConversationAdmin.list_display`: добавлены `booking_stage` и `message_count`.
+      • `ConversationAdmin.list_filter`: добавлен `booking_stage`.
+      • `ConversationAdmin.readonly_fields`: добавлены `booking_stage`, `booking_draft`.
+- [x] **Per-clinic роли/пользователи — НЕ реализованы, зафиксировано как задача:**
+      Ограничение `get_queryset` (менеджер клиники A видит только данные клиники A)
+      требует модели пользователь↔клиника. Сейчас все объекты видит только суперадмин.
+      Задача: создать `ClinicUser` или профиль `User.profile.clinic` → добавить
+      `get_queryset` в `BookingRequestAdmin`, `ConversationAdmin`, `MessageAdmin`
+      с фильтром `clinic=request.user.profile.clinic` для не-суперпользователей.
+      Отложено до появления реальных менеджеров клиник в проде (Фаза 5/6).
+- [x] **57/57 pytest зелёных**, `check` — 0 issues.
+
 ### Промпт #8.3 (часть) — Фаза 3 уведомления клиника-зависимые — ✅ 2026-06-05
 - [x] **`get_whatsapp_provider_for_clinic(clinic)`** добавлена в `providers/whatsapp/factory.py`:
       для `mock` → глобальный singleton; для `evolution` → `EvolutionWhatsAppProvider(
@@ -640,15 +669,13 @@ EVOLUTION_INSTANCE (см. CLAUDE.md, раздел «Evolution API (WhatsApp дл
 - [x] Celery worker поднимается и коннектится к Redis
 
 ## Текущий промпт
-### Промпт #8.4 — Фаза 4: мультитенант — админка + per-clinic токены + seed
+### Промпт #8.5 — per-clinic webhook-токены + seed второй клиники
 
-Маршрутизация, изоляция и клиника-зависимые уведомления закрыты. Осталось:
+Осталось из Промпта #8.4:
 - Убедиться, что webhook-токены можно задавать per-clinic (или одного глобального
   `WHATSAPP_WEBHOOK_TOKEN` достаточно для MVP — зафиксировать решение).
 - Расширить `seed_demo_clinic` или добавить `seed_second_clinic` для ручной проверки
   изоляции (+ заполнить `instance_name` второй клиники).
-- Admin под мультитенант: убедиться, что в списках/инлайнах менеджер клиники A не
-  видит данные клиники B (или хотя бы удобная фильтрация по клинике уже есть).
 
 ### Промпт #3.8 — Автоимпорт имени из pushName + умная запись ✅ 2026-06-04
 - [x] `Conversation.customer_name` (EncryptedCharField, null=True) — новое поле для

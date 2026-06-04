@@ -4,6 +4,10 @@
 Переписка пациентов — медданные. В админке только просмотр (без ручного
 создания/редактирования): списки read-only, контент сообщения НЕ показываем в
 списке (чтобы не расшифровывать пачкой) — только в детальном просмотре.
+
+Ограничение по клинике (get_queryset для менеджеров клиники) будет добавлено
+после реализации модели пользователь↔клиника (Фаза 4 / отдельный промпт).
+Сейчас суперадмин видит всё; фильтр по клинике доступен через list_filter.
 """
 from django.contrib import admin
 
@@ -42,10 +46,10 @@ class MessageInline(admin.StackedInline):
 
 @admin.register(Conversation)
 class ConversationAdmin(_ReadOnlyAdmin):
-    list_display = ("id", "clinic", "customer_phone", "created_at", "updated_at", "message_count")
-    list_filter = ("clinic",)
+    list_display = ("id", "clinic", "customer_phone", "booking_stage", "created_at", "updated_at", "message_count")
+    list_filter = ("clinic", "booking_stage")
     search_fields = ("customer_phone",)
-    readonly_fields = ("clinic", "customer_phone", "customer_name", "created_at", "updated_at")
+    readonly_fields = ("clinic", "customer_phone", "customer_name", "booking_stage", "booking_draft", "created_at", "updated_at")
     inlines = (MessageInline,)
 
     @admin.display(description="Сообщений")
@@ -56,8 +60,8 @@ class ConversationAdmin(_ReadOnlyAdmin):
 @admin.register(Message)
 class MessageAdmin(_ReadOnlyAdmin):
     # В списке контента нет — только метаданные (без расшифровки).
-    list_display = ("id", "conversation", "role", "external_id", "created_at")
-    list_filter = ("role", "conversation__clinic")
+    list_display = ("id", "clinic", "conversation", "role", "external_id", "created_at")
+    list_filter = ("clinic", "role")
     search_fields = ("external_id",)
     # content — в детальном просмотре (расшифровывается ORM-ом при чтении).
-    readonly_fields = ("conversation", "role", "content", "external_id", "created_at")
+    readonly_fields = ("clinic", "conversation", "role", "content", "external_id", "created_at")
