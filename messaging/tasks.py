@@ -15,7 +15,7 @@ Celery-задачи обработки входящих сообщений.
     8. WhatsAppProvider.send_message(customer_phone, ответ).
 
 НЕЗЫБЛЕМОЕ ПРАВИЛО: ни Groq, ни Evolution напрямую — только через фабрики
-get_ai_provider() / get_whatsapp_provider().
+get_ai_provider() / get_whatsapp_provider_for_clinic().
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ from clinics.models import Clinic
 from messaging.models import Conversation, Message
 from messaging.services import build_messages
 from providers.ai.factory import get_ai_provider
-from providers.whatsapp.factory import get_whatsapp_provider
+from providers.whatsapp.factory import get_whatsapp_provider_for_clinic
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +127,7 @@ def handle_incoming_message(
         if clinic.manager_whatsapp and clinic.manager_whatsapp == customer_phone:
             reply = handle_manager_message(clinic, text)
             if reply:
-                get_whatsapp_provider().send_message(customer_phone, reply)
+                get_whatsapp_provider_for_clinic(clinic).send_message(customer_phone, reply)
             logger.info(
                 "[tasks] сообщение от менеджера обработано (clinic=%s).",
                 clinic.id,
@@ -137,7 +137,7 @@ def handle_incoming_message(
         # 0b. Голосовое → текст. Эта ветка ТОЛЬКО превращает аудио в текст;
         #    дальше выполняется тот же текстовый пайплайн (шаги 1–8 ниже).
         if message_type in _VOICE_MESSAGE_TYPES:
-            wa = get_whatsapp_provider()
+            wa = get_whatsapp_provider_for_clinic(clinic)
             # key.id входящего — по нему провайдер отдаёт байты аудио.
             media = wa.download_voice_media(external_id) if external_id else None
             if media is None:
@@ -255,7 +255,7 @@ def handle_incoming_message(
         conversation.save(update_fields=["updated_at"])
 
         # 8. Отправляем ответ клиенту через абстракцию WhatsApp-провайдера.
-        wa = get_whatsapp_provider()
+        wa = get_whatsapp_provider_for_clinic(clinic)
         result = wa.send_message(customer_phone, reply)
         if not result.success:
             logger.error(

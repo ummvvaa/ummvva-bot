@@ -50,7 +50,7 @@ def booking(conversation):
 @pytest.mark.django_db
 def test_notify_manager_sends_and_marks_notified(booking):
     mock_provider = MockWhatsAppProvider()
-    with patch("bookings.tasks.get_whatsapp_provider", return_value=mock_provider):
+    with patch("bookings.tasks.get_whatsapp_provider_for_clinic", return_value=mock_provider):
         notify_manager.apply(args=[booking.id])
 
     # Провайдер получил ровно один вызов send_message
@@ -75,7 +75,7 @@ def test_notify_manager_skips_when_disabled(booking):
     booking.clinic.save()
 
     mock_provider = MockWhatsAppProvider()
-    with patch("bookings.tasks.get_whatsapp_provider", return_value=mock_provider):
+    with patch("bookings.tasks.get_whatsapp_provider_for_clinic", return_value=mock_provider):
         notify_manager.apply(args=[booking.id])
 
     # send не вызывался
@@ -92,7 +92,7 @@ def test_notify_manager_skips_when_no_manager_number(booking):
     booking.clinic.save()
 
     mock_provider = MockWhatsAppProvider()
-    with patch("bookings.tasks.get_whatsapp_provider", return_value=mock_provider):
+    with patch("bookings.tasks.get_whatsapp_provider_for_clinic", return_value=mock_provider):
         notify_manager.apply(args=[booking.id])
 
     # send не вызывался, задача не упала

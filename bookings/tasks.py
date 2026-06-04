@@ -8,7 +8,7 @@ from celery import shared_task
 from celery.exceptions import MaxRetriesExceededError
 
 from bookings.models import BookingRequest
-from providers.whatsapp.factory import get_whatsapp_provider
+from providers.whatsapp.factory import get_whatsapp_provider_for_clinic
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ def notify_manager(self, booking_id: int) -> None:
     )
 
     try:
-        wa = get_whatsapp_provider()
+        wa = get_whatsapp_provider_for_clinic(clinic)
         result = wa.send_message(clinic.manager_whatsapp, text)
         if result.success:
             booking.status = BookingRequest.Status.NOTIFIED
@@ -168,7 +168,7 @@ def notify_customer(self, booking_id: int) -> None:
         return
 
     try:
-        wa = get_whatsapp_provider()
+        wa = get_whatsapp_provider_for_clinic(booking.clinic)
         result = wa.send_message(booking.customer_phone, text)
         if result.success:
             logger.info(

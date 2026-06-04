@@ -13,6 +13,7 @@
 - test_booking_flow: сквозной e2e на mock, 14/14 проверок ✓, чеклист для реального теста ✓
 - 38/38 pytest зелёных ✓
 
+🟡 Фаза 3 — уведомления клиника-зависимые: notify_manager/notify_customer через clinic-провайдер, тесты изоляции ✓
 🟡 Фаза 4 (мультитенант) — В РАБОТЕ: данные (Промпт #8.1) + маршрутизация (#8.2):
 - Clinic расширена: `instance_name` (unique), `timezone` (default Asia/Almaty) ✓
 - FK `clinic` (on_delete=PROTECT) во всех доменных моделях: Conversation,
@@ -39,6 +40,36 @@ EVOLUTION_INSTANCE (см. CLAUDE.md, раздел «Evolution API (WhatsApp дл
 - [ ] Фаза 6 — Прод (Meta Cloud API, деплой, мониторинг)
 
 ## Завершённые промпты
+### Промпт #8.3 (часть) — Фаза 3 уведомления клиника-зависимые — ✅ 2026-06-05
+- [x] **`get_whatsapp_provider_for_clinic(clinic)`** добавлена в `providers/whatsapp/factory.py`:
+      для `mock` → глобальный singleton; для `evolution` → `EvolutionWhatsAppProvider(
+      instance_name=clinic.instance_name)`, закешированный по `instance_name`.
+- [x] **`EvolutionWhatsAppProvider.__init__`** получил необязательный параметр
+      `instance_name: str | None` — переопределяет `EVOLUTION_INSTANCE` из env.
+      Клиника без `instance_name` → фолбэк на глобальный `EVOLUTION_INSTANCE`.
+- [x] **`bookings/tasks.py`**: `notify_manager` использует `get_whatsapp_provider_for_clinic(clinic)`;
+      `notify_customer` — `get_whatsapp_provider_for_clinic(booking.clinic)`. Уведомления
+      уходят ровно через тот инстанс/подключение, которое принадлежит данной клинике.
+- [x] **`messaging/tasks.py`**: все три вызова `get_whatsapp_provider()` (ответ менеджеру,
+      голосовой пайплайн, ответ пациенту) заменены на `get_whatsapp_provider_for_clinic(clinic)`.
+      Clinic известна на момент всех отправок (резолвится в шаге 0).
+- [x] **Существующие pytest-тесты** обновлены: все патчи `*.get_whatsapp_provider` →
+      `*.get_whatsapp_provider_for_clinic` (5 файлов: test_notify, test_manager,
+      test_finalize, test_push_name, test_routing).
+- [x] **Новый файл `bookings/test_clinic_notify.py`**, 5 тестов (MockProvider, офлайн):
+      • `test_notify_manager_uses_clinic_a_provider` — заявка А → провайдер А получил
+        1 вызов на `manager_whatsapp` А; провайдер Б — 0 вызовов;
+      • `test_notify_manager_clinic_b_does_not_use_clinic_a_provider` — зеркальный,
+        заявка Б → только провайдер Б активен;
+      • `test_notify_customer_uses_clinic_a_provider` — подтверждение пациенту А
+        идёт через провайдер А, провайдер Б не вызывается;
+      • `test_manager_a_response_does_not_affect_clinic_b_booking` — менеджер А
+        шлёт «+booking_b.id»: заявка Б остаётся NOTIFIED, пациент Б не уведомлён
+        (кросс-клиничный матчинг по `booking.clinic_id != clinic.id` блокирует);
+      • `test_manager_a_confirms_own_clinic_booking` — менеджер А успешно подтверждает
+        заявку А, провайдер Б не получает сообщений пациентам.
+- [x] **57/57 pytest зелёных**, `check` — 0 issues.
+
 ### Промпт #8.2 — Фаза 4: мультитенант — маршрутизация + изоляция по клинике — ✅ 2026-06-05
 - [x] **Изучены реальный payload Evolution и существующий путь** (webhook_parser →
       views → tasks) перед правкой — не угадывал ключ маршрутизации.
@@ -609,10 +640,9 @@ EVOLUTION_INSTANCE (см. CLAUDE.md, раздел «Evolution API (WhatsApp дл
 - [x] Celery worker поднимается и коннектится к Redis
 
 ## Текущий промпт
-### Промпт #8.3 — Фаза 4: мультитенант — админка + per-clinic токены + seed
+### Промпт #8.4 — Фаза 4: мультитенант — админка + per-clinic токены + seed
 
-Маршрутизация и изоляция закрыты (Промпт #8.2: instance_name→номер, скоупинг
-менеджера, таймзона, тесты). Осталось:
+Маршрутизация, изоляция и клиника-зависимые уведомления закрыты. Осталось:
 - Убедиться, что webhook-токены можно задавать per-clinic (или одного глобального
   `WHATSAPP_WEBHOOK_TOKEN` достаточно для MVP — зафиксировать решение).
 - Расширить `seed_demo_clinic` или добавить `seed_second_clinic` для ручной проверки

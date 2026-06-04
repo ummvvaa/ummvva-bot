@@ -31,12 +31,13 @@ class EvolutionWhatsAppProvider(WhatsAppProvider):
     Базовый URL, ключ и имя инстанса берутся из settings (которые читают ENV).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, instance_name: str | None = None) -> None:
         from django.conf import settings
 
         base_url = (settings.EVOLUTION_API_URL or "").rstrip("/")
         api_key = settings.EVOLUTION_API_KEY or ""
-        instance = settings.EVOLUTION_INSTANCE or ""
+        # Per-clinic instance_name overrides the global EVOLUTION_INSTANCE env var.
+        instance = instance_name or (settings.EVOLUTION_INSTANCE or "")
 
         missing = [
             name

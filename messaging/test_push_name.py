@@ -34,7 +34,7 @@ def _run_task(clinic, customer_phone, text, push_name="", external_id="ext-001")
     """Запустить handle_incoming_message синхронно с mock-провайдерами."""
     with (
         patch("messaging.tasks.get_ai_provider", return_value=MockAIProvider()),
-        patch("messaging.tasks.get_whatsapp_provider", return_value=MockWhatsAppProvider()),
+        patch("messaging.tasks.get_whatsapp_provider_for_clinic", return_value=MockWhatsAppProvider()),
     ):
         handle_incoming_message(
             clinic_number=clinic.whatsapp_number,

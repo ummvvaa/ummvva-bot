@@ -68,8 +68,8 @@ def _run_manager_message(text, clinic, mock_provider):
     from messaging.tasks import handle_incoming_message
 
     with (
-        patch("messaging.tasks.get_whatsapp_provider", return_value=mock_provider),
-        patch("bookings.tasks.get_whatsapp_provider", return_value=mock_provider),
+        patch("messaging.tasks.get_whatsapp_provider_for_clinic", return_value=mock_provider),
+        patch("bookings.tasks.get_whatsapp_provider_for_clinic", return_value=mock_provider),
     ):
         handle_incoming_message(
             clinic_number=clinic.whatsapp_number,
@@ -157,8 +157,8 @@ def test_manager_cannot_touch_foreign_clinic_booking(booking, settings):
     from messaging.tasks import handle_incoming_message
 
     with (
-        patch("messaging.tasks.get_whatsapp_provider", return_value=mock_provider),
-        patch("bookings.tasks.get_whatsapp_provider", return_value=mock_provider),
+        patch("messaging.tasks.get_whatsapp_provider_for_clinic", return_value=mock_provider),
+        patch("bookings.tasks.get_whatsapp_provider_for_clinic", return_value=mock_provider),
     ):
         handle_incoming_message(
             clinic_number=other_clinic.whatsapp_number,
@@ -215,7 +215,7 @@ def test_patient_message_still_goes_to_patient_flow(clinic, settings):
 
     with (
         patch("messaging.tasks.get_ai_provider", return_value=MockAIProvider()),
-        patch("messaging.tasks.get_whatsapp_provider", return_value=mock_provider),
+        patch("messaging.tasks.get_whatsapp_provider_for_clinic", return_value=mock_provider),
     ):
         handle_incoming_message(
             clinic_number=clinic.whatsapp_number,

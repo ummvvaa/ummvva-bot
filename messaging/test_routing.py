@@ -27,7 +27,7 @@ def _run(mock_provider, **kwargs):
 
     with (
         patch("messaging.tasks.get_ai_provider", return_value=MockAIProvider()),
-        patch("messaging.tasks.get_whatsapp_provider", return_value=mock_provider),
+        patch("messaging.tasks.get_whatsapp_provider_for_clinic", return_value=mock_provider),
     ):
         handle_incoming_message(customer_phone=CUSTOMER_PHONE, **kwargs)
 
