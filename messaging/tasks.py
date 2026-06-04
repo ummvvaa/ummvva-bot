@@ -175,6 +175,7 @@ def handle_incoming_message(
         # 5. Сохраняем входящее сообщение.
         Message.objects.create(
             conversation=conversation,
+            clinic=clinic,
             role=Message.Role.USER,
             content=text,
             external_id=external_id,
@@ -219,6 +220,7 @@ def handle_incoming_message(
         # 7. Сохраняем ответ бота.
         Message.objects.create(
             conversation=conversation,
+            clinic=clinic,
             role=Message.Role.ASSISTANT,
             content=reply,
         )

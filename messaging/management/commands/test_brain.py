@@ -81,11 +81,11 @@ class Command(BaseCommand):
         )
         if not conversation.messages.exists():
             Message.objects.create(
-                conversation=conversation, role=Message.Role.USER,
+                conversation=conversation, clinic=clinic, role=Message.Role.USER,
                 content="Здравствуйте, вы работаете в воскресенье?",
             )
             Message.objects.create(
-                conversation=conversation, role=Message.Role.ASSISTANT,
+                conversation=conversation, clinic=clinic, role=Message.Role.ASSISTANT,
                 content="Здравствуйте! В воскресенье у нас выходной, работаем Пн–Сб.",
             )
 

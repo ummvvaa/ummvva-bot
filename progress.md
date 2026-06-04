@@ -13,6 +13,14 @@
 - test_booking_flow: сквозной e2e на mock, 14/14 проверок ✓, чеклист для реального теста ✓
 - 38/38 pytest зелёных ✓
 
+🟡 Фаза 4 (мультитенант) — НАЧАТА: уровень ДАННЫХ готов (Промпт #8.1):
+- Clinic расширена: `instance_name` (unique), `timezone` (default Asia/Almaty) ✓
+- FK `clinic` (on_delete=PROTECT) во всех доменных моделях: Conversation,
+  Message (новый прямой FK), BookingRequest ✓
+- Data-миграции с бэкфиллом: Message.clinic из conversation.clinic;
+  instance_name из EVOLUTION_INSTANCE для single-clinic ✓
+- Маршрутизация и админка под мультитенант — СЛЕДУЮЩИЕ промпты.
+
 **Статус Evolution-интеграции:** код EvolutionWhatsAppProvider готов;
 для реального теста нужно заполнить .env: EVOLUTION_API_URL, EVOLUTION_API_KEY,
 EVOLUTION_INSTANCE (см. CLAUDE.md, раздел «Evolution API (WhatsApp для MVP)»).
@@ -27,6 +35,47 @@ EVOLUTION_INSTANCE (см. CLAUDE.md, раздел «Evolution API (WhatsApp дл
 - [ ] Фаза 6 — Прод (Meta Cloud API, деплой, мониторинг)
 
 ## Завершённые промпты
+### Промпт #8.1 — Фаза 4: мультитенант на уровне ДАННЫХ (модели + миграции) — ✅ 2026-06-05
+- [x] **Изучены существующие модели перед правкой** (не дублировал): `Clinic` уже
+      была (name/whatsapp_number(unique)/services_json/working_hours/address/tone/faq/
+      is_active/manager_whatsapp/notifications_enabled/created_at/updated_at).
+      `Conversation` и `BookingRequest` уже несли FK `clinic` — расширял, не плодил.
+- [x] **Clinic расширена двумя полями:**
+      • `instance_name` — CharField(max_length=255, **unique**, null/blank) — имя
+        инстанса Evolution / идентификатор подключения. nullable, чтобы старые
+        клиники пережили миграцию (бэкфилл из env). Уникален: два подключения на
+        одну клинику нельзя.
+      • `timezone` — CharField(default="Asia/Almaty") — для корректного разбора
+        «завтра/сегодня» относительно местного времени.
+      • `services_prices` из ТЗ покрыт уже существующим `services_json` — НЕ
+        переименовывал (сломало бы prompt.py/seed/admin).
+- [x] **FK `clinic` (on_delete=PROTECT) во всех доменных моделях:**
+      • `Conversation.clinic`: CASCADE → **PROTECT** (был, поменял on_delete).
+      • `BookingRequest.clinic`: CASCADE → **PROTECT** (был, поменял on_delete).
+      • `Message.clinic`: **новый прямой FK** (PROTECT, db_index) — денормализация
+        поверх conversation.clinic для прямой изоляции/индексации горячей таблицы
+        сообщений без JOIN. PROTECT защищает ПДн от случайного каскадного сноса
+        клиники.
+- [x] **Уникальность / индексы:** `instance_name` unique; `whatsapp_number` уже
+      unique; FK `Message.clinic` и `Conversation.clinic` индексированы (FK → индекс).
+- [x] **Миграции с бэкфиллом (data-миграции, не вручную):**
+      • `clinics/0003` — schema: instance_name + timezone.
+      • `clinics/0004` — data: instance_name ← EVOLUTION_INSTANCE из env ТОЛЬКО для
+        однозначного single-clinic случая (1 клиника, env непустой, имя свободно);
+        иначе no-op (нельзя вешать один инстанс на несколько клиник).
+      • `messaging/0004` — AlterField Conversation.clinic→PROTECT; AddField
+        Message.clinic(null=True) → RunPython бэкфилл (clinic ← conversation.clinic
+        по диалогам, без N сейвов) → AlterField Message.clinic(NOT NULL). Так
+        существующие сообщения на проде не падают на NOT NULL.
+      • `bookings/0002` — AlterField BookingRequest.clinic→PROTECT.
+- [x] **Код подстроен под NOT NULL Message.clinic:** оба `Message.objects.create`
+      в `messaging/tasks.py` (user + assistant) получают `clinic=clinic`; так же в
+      `test_brain.py`. `seed_demo_clinic --force` теперь сносит bookings+conversations
+      до `clinic.delete()` (иначе ProtectedError на PROTECT).
+- [x] **Зелёное:** `makemigrations --check` → No changes detected; `manage.py check`
+      → 0 issues; `migrate` применил 4 миграции чисто; **pytest 44/44**.
+      Бэкфилл проверен в БД: 64 сообщения, 0 без clinic; timezone у всех Asia/Almaty.
+
 ### Промпт #7 — Фаза 3: финализация (admin-actions, seed, E2E test_booking_flow) — ✅ 2026-06-04
 - [x] **BookingRequestAdmin** доведён до рабочего инструмента менеджера:
       • `action_confirm_selected` / `action_reject_selected` — bulk-actions вызывают
@@ -511,15 +560,16 @@ EVOLUTION_INSTANCE (см. CLAUDE.md, раздел «Evolution API (WhatsApp дл
 - [x] Celery worker поднимается и коннектится к Redis
 
 ## Текущий промпт
-### Промпт #8 — Фаза 4: мультитенант (много клиник на одном сервере)
+### Промпт #8.2 — Фаза 4: мультитенант — маршрутизация + админка + изоляция
 
-Фаза 3 полностью закрыта. Следующие шаги — Фаза 4 (мультитенант):
-- Проверить, что маршрутизация по `Clinic.whatsapp_number` работает корректно
-  при нескольких клиниках в БД (webhook → tasks → правильная клиника).
+Уровень ДАННЫХ закрыт (Промпт #8.1: модели + миграции + бэкфилл). Осталось:
+- Проверить, что маршрутизация по `Clinic.whatsapp_number` (и/или `instance_name`)
+  работает корректно при нескольких клиниках в БД (webhook → tasks → правильная
+  клиника). Решить, маршрутизировать ли по instance_name, раз он теперь есть.
 - Убедиться, что webhook-токены можно задавать per-clinic (или одного глобального
   достаточно для MVP).
 - Расширить `seed_demo_clinic` или добавить `seed_second_clinic` для тестирования
-  изоляции данных между клиниками.
+  изоляции данных между клиниками (+ заполнить instance_name второй клиники).
 - Проверить изоляцию: сообщения клиники A не видны в admin клиники B.
 - Изоляция заявок: менеджер клиники A не трогает заявки клиники B (уже реализовано
   в bookings/manager.py, добавить тест с двумя клиниками сразу).

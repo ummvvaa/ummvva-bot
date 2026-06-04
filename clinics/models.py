@@ -25,6 +25,18 @@ class Clinic(models.Model):
         help_text="Номер-получатель в формате E.164, по нему определяется клиника",
     )
 
+    # Имя инстанса Evolution API / идентификатор WhatsApp-подключения этой клиники.
+    # Уникален: две клиники не могут делить одно подключение. nullable — у старых
+    # клиник до Фазы 4 его могло не быть (бэкфилл из EVOLUTION_INSTANCE в миграции).
+    instance_name = models.CharField(
+        "Инстанс Evolution",
+        max_length=255,
+        unique=True,
+        null=True,
+        blank=True,
+        help_text="Имя инстанса Evolution API (идентификатор подключения клиники)",
+    )
+
     # Услуги и цены в свободной JSON-структуре, например:
     # [{"name": "Чистка", "price": "15000 ₸"}, ...]
     services_json = models.JSONField("Услуги и цены", default=list, blank=True)
@@ -44,6 +56,15 @@ class Clinic(models.Model):
     # Часто задаваемые вопросы и ответы, например:
     # [{"q": "Есть ли рассрочка?", "a": "Да, до 6 месяцев."}, ...]
     faq = models.JSONField("FAQ", default=list, blank=True)
+
+    # Часовой пояс клиники (IANA, например Asia/Almaty). Нужен для корректного
+    # разбора «завтра/сегодня» и времени заявок относительно местного времени.
+    timezone = models.CharField(
+        "Часовой пояс",
+        max_length=64,
+        default="Asia/Almaty",
+        help_text="IANA-таймзона клиники (например, Asia/Almaty)",
+    )
 
     is_active = models.BooleanField("Активна", default=True)
 

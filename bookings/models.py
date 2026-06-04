@@ -31,7 +31,7 @@ class BookingRequest(models.Model):
     clinic = models.ForeignKey(
         "clinics.Clinic",
         verbose_name="Клиника",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="bookings",
         db_index=True,
     )

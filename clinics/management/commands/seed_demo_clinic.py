@@ -121,6 +121,10 @@ class Command(BaseCommand):
             return
 
         if existing and force:
+            # clinic.clinic — PROTECT: сначала удаляем зависимые данные (заявки и
+            # переписки; сообщения уйдут каскадом за диалогами), потом саму клинику.
+            existing.bookings.all().delete()
+            existing.conversations.all().delete()
             existing.delete()
             self.stdout.write(f"  Старая запись (id={existing.pk}) удалена.")
 

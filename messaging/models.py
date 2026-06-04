@@ -29,7 +29,7 @@ class Conversation(models.Model):
     clinic = models.ForeignKey(
         "clinics.Clinic",
         verbose_name="Клиника",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="conversations",
         db_index=True,
     )
@@ -87,6 +87,17 @@ class Message(models.Model):
         verbose_name="Диалог",
         on_delete=models.CASCADE,
         related_name="messages",
+    )
+
+    # Денормализованная привязка к клинике (мультитенант, Фаза 4). Дублирует
+    # conversation.clinic, но нужна для прямой изоляции/индексации горячей таблицы
+    # сообщений по клинике без JOIN на Conversation. Заполняется из диалога.
+    clinic = models.ForeignKey(
+        "clinics.Clinic",
+        verbose_name="Клиника",
+        on_delete=models.PROTECT,
+        related_name="messages",
+        db_index=True,
     )
 
     role = models.CharField("Роль", max_length=16, choices=Role.choices)
