@@ -6,6 +6,7 @@ Django settings for ummvva-bot.
 import os
 from pathlib import Path
 
+from celery.schedules import crontab
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -49,6 +50,7 @@ INSTALLED_APPS = [
     "clinics",
     "messaging",
     "bookings",
+    "billing",
 ]
 
 MIDDLEWARE = [
@@ -82,17 +84,21 @@ TEMPLATES = [
 WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
 
-# --- База данных (PostgreSQL) ---
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.environ.get("POSTGRES_DB", "ummvva"),
-        "USER": os.environ.get("POSTGRES_USER", "ummvva"),
-        "PASSWORD": os.environ.get("POSTGRES_PASSWORD", "ummvva"),
-        "HOST": os.environ.get("POSTGRES_HOST", "localhost"),
-        "PORT": os.environ.get("POSTGRES_PORT", "5432"),
+# --- База данных ---
+# USE_SQLITE_FOR_TESTS=1 позволяет pytest работать без Docker/Postgres (conftest).
+if env_bool("USE_SQLITE_FOR_TESTS"):
+    DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": os.environ.get("POSTGRES_DB", "ummvva"),
+            "USER": os.environ.get("POSTGRES_USER", "ummvva"),
+            "PASSWORD": os.environ.get("POSTGRES_PASSWORD", "ummvva"),
+            "HOST": os.environ.get("POSTGRES_HOST", "localhost"),
+            "PORT": os.environ.get("POSTGRES_PORT", "5432"),
+        }
     }
-}
 
 # --- Пароли ---
 AUTH_PASSWORD_VALIDATORS = [
@@ -129,6 +135,17 @@ CELERY_RESULT_SERIALIZER = "json"
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TIMEZONE = TIME_ZONE
 
+# Расписание периодических задач (Celery beat). Запускается процессом
+# `celery -A config beat` (сервис `beat` в docker-compose).
+# Ежедневная проверка подписок: напоминания об оплате, перевод в past_due,
+# автосуспенд после грейса. Время — 09:00 по Asia/Almaty (CELERY_TIMEZONE).
+CELERY_BEAT_SCHEDULE = {
+    "billing-daily-cycle": {
+        "task": "billing.tasks.run_billing_cycle",
+        "schedule": crontab(hour=9, minute=0),
+    },
+}
+
 # --- Провайдеры (выбор реализации через окружение) ---
 WHATSAPP_PROVIDER = os.environ.get("WHATSAPP_PROVIDER", "mock")
 AI_PROVIDER = os.environ.get("AI_PROVIDER", "mock")
@@ -159,6 +176,26 @@ META_VERIFY_TOKEN = os.environ.get("META_VERIFY_TOKEN", "")
 # Окно дедупликации заявок на запись (минуты). Если за это время от того же диалога
 # уже есть заявка со статусом new/notified — обновляем её, не создаём дубль.
 BOOKING_DEDUP_MINUTES = int(os.environ.get("BOOKING_DEDUP_MINUTES", "30"))
+
+# --- Биллинг (Фаза 5) ---
+# Длительность пробного периода новой клиники в днях (автотриал через сигнал).
+TRIAL_DAYS = int(os.environ.get("TRIAL_DAYS", "14"))
+# Грейс-период после окончания оплаченного периода до приостановки, в днях.
+GRACE_DAYS = int(os.environ.get("GRACE_DAYS", "3"))
+# Платёжный провайдер по умолчанию (manual — приём оплат вручную).
+BILLING_PROVIDER = os.environ.get("BILLING_PROVIDER", "manual")
+# Отправлять ли неоплатившей (suspended) клинике короткое нейтральное уведомление
+# «сервис недоступен». AI при этом НЕ вызывается (токены Groq не тратим).
+SEND_SUSPENDED_NOTICE = os.environ.get("SEND_SUSPENDED_NOTICE", "true").lower() == "true"
+# Тротлинг этого уведомления: не чаще одного раза в N часов на диалог (чтобы не
+# спамить пациенту на каждое сообщение). Отметка — на Conversation.suspended_notice_at.
+SUSPENDED_NOTICE_THROTTLE_HOURS = int(
+    os.environ.get("SUSPENDED_NOTICE_THROTTLE_HOURS", "24")
+)
+# Номер владельца SaaS (WhatsApp) для служебных алертов биллинга — например,
+# мягкое уведомление «клиника превысила лимит сообщений». Опционально: если пусто,
+# алерт остаётся только в логах (бота это не трогает).
+OWNER_WHATSAPP = os.environ.get("OWNER_WHATSAPP", "").strip()
 
 # --- Логирование (минимально, без персональных данных) ---
 LOGGING = {

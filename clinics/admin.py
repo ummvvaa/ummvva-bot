@@ -4,7 +4,7 @@ from django import forms
 from django.contrib import admin
 from django.db import models
 
-from .models import Clinic
+from .models import Clinic, ClinicUser
 
 
 class _PrettyJSONWidget(forms.Textarea):
@@ -51,3 +51,14 @@ class ClinicAdmin(admin.ModelAdmin):
         ),
         ("Служебное", {"fields": ("created_at", "updated_at")}),
     )
+
+
+@admin.register(ClinicUser)
+class ClinicUserAdmin(admin.ModelAdmin):
+    """Привязка Django-пользователей к клиникам (для кабинета клиники в admin)."""
+
+    list_display = ("user", "clinic", "created_at")
+    list_filter = ("clinic",)
+    search_fields = ("user__username", "clinic__name")
+    autocomplete_fields = ("clinic",)
+    readonly_fields = ("created_at",)

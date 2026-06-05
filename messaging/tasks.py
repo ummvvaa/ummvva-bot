@@ -20,10 +20,14 @@ get_ai_provider() / get_whatsapp_provider_for_clinic().
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 
 from celery import shared_task
+from django.conf import settings
+from django.utils import timezone
 
-from bookings.flow import finalize_booking, handle_booking_turn
+from billing import services as billing
+from bookings.flow import finalize_booking, handle_booking_turn, validate_booking_draft
 from bookings.manager import handle_manager_message
 from bookings.tasks import notify_manager
 from clinics.models import Clinic
@@ -42,6 +46,9 @@ _FALLBACK_REPLY = (
 
 # Отправляем клиенту, когда голосовое не удалось скачать/распознать.
 _VOICE_FAIL_REPLY = "Не смог разобрать голосовое, повтори текстом, пожалуйста"
+
+# Нейтральная фраза для пациента suspended-клиники (без AI, без медицинских ответов).
+_SUSPENDED_NOTICE = "Сервис временно недоступен, мы скоро свяжемся с вами."
 
 # messageType (Evolution), которые приходят как голосовые.
 _VOICE_MESSAGE_TYPES = ("audioMessage", "pttMessage")
@@ -78,6 +85,48 @@ def _booking_confirmation_reply(booking, clinic) -> str:
         f"Спасибо! Передал заявку администратору клиники «{clinic.name}»: {details}. "
         "Он свяжется с вами и подтвердит точное время."
     )
+
+
+def _revert_invalid_time(conversation: Conversation) -> None:
+    """Сбросить невалидное время в черновике и вернуться к сбору времени.
+
+    Время не прошло валидацию (выходной/вне часов/не кратно 30/прошло) — стираем
+    его из черновика и ставим stage=collecting, чтобы бот ждал корректное время,
+    а не пытался снова отправить ту же заявку. Услуга/день/имя сохраняются.
+    """
+    draft = dict(conversation.booking_draft or {})
+    for key in ("preferred_time_raw", "preferred_time"):
+        draft.pop(key, None)
+    conversation.booking_draft = draft
+    conversation.booking_stage = Conversation.BookingStage.COLLECTING
+    conversation.save(update_fields=["booking_stage", "booking_draft", "updated_at"])
+
+
+def _maybe_send_suspended_notice(clinic: Clinic, customer_phone: str) -> None:
+    """Один раз за N часов ответить пациенту suspended-клиники нейтральной фразой.
+
+    Никакого AI и никаких медицинских ответов. Тротлинг — по отметке
+    Conversation.suspended_notice_at (не чаще раза в SUSPENDED_NOTICE_THROTTLE_HOURS),
+    чтобы не спамить на каждое входящее. Управляется флагом SEND_SUSPENDED_NOTICE.
+    """
+    if not settings.SEND_SUSPENDED_NOTICE:
+        return
+
+    # Диалог нужен только как место для отметки тротлинга. Сообщения пациента и
+    # ответы AI для suspended-клиники НЕ сохраняем (бот не обслуживает).
+    conversation, _ = Conversation.objects.get_or_create(
+        clinic=clinic, customer_phone=customer_phone
+    )
+
+    now = timezone.now()
+    throttle = timedelta(hours=settings.SUSPENDED_NOTICE_THROTTLE_HOURS)
+    last = conversation.suspended_notice_at
+    if last is not None and now - last < throttle:
+        return  # уже уведомляли недавно — молчим, чтобы не спамить
+
+    get_whatsapp_provider_for_clinic(clinic).send_message(customer_phone, _SUSPENDED_NOTICE)
+    conversation.suspended_notice_at = now
+    conversation.save(update_fields=["suspended_notice_at", "updated_at"])
 
 
 @shared_task(ignore_result=True)
@@ -134,8 +183,24 @@ def handle_incoming_message(
             )
             return
 
+        # 0c. ГЕЙТ ПОДПИСКИ (Фаза 5). Между «определили клинику» и «дёрнули AI».
+        #     Неоплатившую клинику НЕ обслуживаем и НЕ тратим на неё токены Groq:
+        #     ни транскрипции голоса, ни генерации ответа, ни заявок.
+        if not billing.is_clinic_serviceable(clinic):
+            logger.info(
+                "[billing] клиника %s не обслуживается (status=%s) — Groq не вызываем, пропуск.",
+                clinic.id,
+                billing.subscription_status(clinic),
+            )
+            # По флагу — один раз за N часов нейтральная фраза пациенту (с тротлингом).
+            _maybe_send_suspended_notice(clinic, customer_phone)
+            return
+
         # 0b. Голосовое → текст. Эта ветка ТОЛЬКО превращает аудио в текст;
         #    дальше выполняется тот же текстовый пайплайн (шаги 1–8 ниже).
+        # transcribed — был ли реальный вызов Groq (Whisper). Учитываем в ai_calls
+        # ПОСЛЕ дедупликации (ниже), чтобы ретрай не задвоил счётчик.
+        transcribed = False
         if message_type in _VOICE_MESSAGE_TYPES:
             wa = get_whatsapp_provider_for_clinic(clinic)
             # key.id входящего — по нему провайдер отдаёт байты аудио.
@@ -168,6 +233,7 @@ def handle_incoming_message(
             )
             # Дальше — общий текстовый поток обработки.
             text = transcript
+            transcribed = True
 
         # 2. Диалог: один на пару (клиника, номер клиента). Изоляция: диалог
         #    всегда привязан к найденной клинике — один и тот же номер клиента,
@@ -208,6 +274,14 @@ def handle_incoming_message(
             external_id=external_id,
         )
 
+        # 5a. Учёт потребления (Фаза 5). Стоит ПОСЛЕ дедупликации (шаг 3) — ретрай
+        #     задачи выйдет на дубле и сюда не дойдёт, поэтому одно входящее не
+        #     задвоит счётчик. Инкременты атомарны через F() (см. billing.services).
+        billing.record_incoming(clinic)
+        if transcribed:
+            # Голосовое уже распознали Whisper'ом выше — это реальный вызов Groq.
+            billing.record_ai_call(clinic)
+
         # 6. Флоу записи (Фаза 3). Запускается на каждом входящем до AI-генерации.
         #    Контракт handle_booking_turn (см. докстринг bookings/flow.py):
         #    • str  + stage=collecting → уточняющий вопрос: отправляем, AI не зовём.
@@ -225,16 +299,26 @@ def handle_incoming_message(
                 booking = finalize_booking(conversation, clinic)
                 notify_manager.delay(booking.id)
         elif stage == Conversation.BookingStage.READY:
-            # Черновик собран полностью: создаём заявку и отправляем подтверждение.
-            booking = finalize_booking(conversation, clinic)
-            notify_manager.delay(booking.id)
-            reply = _booking_confirmation_reply(booking, clinic)
+            # Черновик собран полностью. ПЕРЕД отправкой менеджеру проверяем
+            # желаемое время (Фаза 3, правило #5): прошлая дата / выходной /
+            # вне часов / не кратно 30 мин / нет часа до закрытия → НЕ отправляем,
+            # возвращаем пациенту причину и ждём корректное время.
+            ok, reason = validate_booking_draft(conversation.booking_draft, clinic.working_hours)
+            if ok:
+                booking = finalize_booking(conversation, clinic)
+                notify_manager.delay(booking.id)
+                reply = _booking_confirmation_reply(booking, clinic)
+            else:
+                reply = reason
+                _revert_invalid_time(conversation)
         else:
             # Обычный вопрос о ценах/услугах — штатный AI-флоу Фазы 1.
             # При 429 / 5xx GroqAIProvider делает ретраи с exponential backoff.
             try:
                 ai = get_ai_provider()
                 reply = ai.generate(messages, clinic)
+                # Реальный вызов Groq состоялся — учитываем (атомарно через F()).
+                billing.record_ai_call(clinic)
             except Exception as exc:
                 logger.error(
                     "[tasks] AI недоступен после ретраев (clinic=%s, phone=%s): %s",
@@ -264,11 +348,18 @@ def handle_incoming_message(
                 (result.raw or {}).get("error"),
             )
         else:
+            # Учёт исходящего (Фаза 5). Внутри post-dedup тела — ретрай сюда не дойдёт.
+            billing.record_outgoing(clinic)
             logger.info(
                 "Ответ отправлен (clinic=%s, message_id=%s).",
                 clinic.id,
                 result.message_id,
             )
+
+        # 9. Мягкий лимит (Фаза 5): если входящих стало больше плана и в этом
+        #    периоде владельцу ещё не слали алерт — фиксируем (уведомление — #5).
+        #    Бота при этом НЕ отключаем.
+        billing.alert_over_limit_once(clinic)
 
     except Exception as exc:
         # Ловим всё, что не поймали выше, чтобы не роняли всю Celery-очередь.

@@ -60,5 +60,22 @@ services:
       redis:
         condition: service_healthy
 
+  # Планировщик периодических задач (Celery beat). Шлёт run_billing_cycle по
+  # расписанию из settings.CELERY_BEAT_SCHEDULE; выполняет задачу — worker.
+  beat:
+    build: .
+    command: celery -A config beat -l info
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: db
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
 volumes:
   pgdata:

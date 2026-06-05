@@ -91,3 +91,34 @@ class Clinic(models.Model):
 
     def __str__(self) -> str:
         return f"{self.name} ({self.whatsapp_number})"
+
+
+class ClinicUser(models.Model):
+    """Связь Django-пользователя с клиникой.
+
+    Даёт менеджеру клиники доступ к Django admin в режиме read-only:
+    видит только свои подписки, платежи и счётчики потребления — не чужих клиник.
+    Суперадмин (владелец SaaS) не требует ClinicUser — он видит всё.
+    """
+
+    user = models.OneToOneField(
+        "auth.User",
+        verbose_name="Пользователь",
+        on_delete=models.CASCADE,
+        related_name="clinic_profile",
+    )
+    clinic = models.ForeignKey(
+        Clinic,
+        verbose_name="Клиника",
+        on_delete=models.CASCADE,
+        related_name="staff_users",
+    )
+
+    created_at = models.DateTimeField("Создан", auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Пользователь клиники"
+        verbose_name_plural = "Пользователи клиник"
+
+    def __str__(self) -> str:
+        return f"{self.user} → {self.clinic}"

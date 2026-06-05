@@ -60,6 +60,13 @@ class Conversation(models.Model):
     # (+ служебный _miss_count — счётчик нерелевантных ответов для анти-тупика).
     booking_draft = models.JSONField("Черновик заявки", default=dict, blank=True)
 
+    # Когда пациенту последний раз отправили уведомление «сервис недоступен»
+    # (suspended-клиника, Фаза 5). Нужно для тротлинга — не спамить на каждое
+    # входящее. null = ещё ни разу не слали.
+    suspended_notice_at = models.DateTimeField(
+        "Последнее уведомление о недоступности", null=True, blank=True
+    )
+
     created_at = models.DateTimeField("Создан", auto_now_add=True)
     updated_at = models.DateTimeField("Обновлён", auto_now=True)
 

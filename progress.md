@@ -1,6 +1,29 @@
 # Progress Log — ummvva-bot
 
 ## Текущий статус
+🟢 **Фаза 5 (биллинг) — ЗАВЕРШЕНА** (Промпты #1–#7). **133/133 pytest**, `check` — 0 issues.
+
+Что работает:
+- Автотриал при создании клиники (сигнал post_save → Subscription trialing)
+- Гейт подписки в пайплайне: неоплатившим Groq НЕ дёргаем вообще (ни text, ни voice)
+- Usage-учёт: messages_in/out, ai_calls через F() идемпотентно
+- Manual-оплата: confirm_payment → подписка active, период +30 дней; повторный confirm идемпотентен
+- Beat-цикл (09:00 Asia/Almaty): напоминания T-3/T-1, past_due, автосуспенд с grace, без дублей
+- Admin владельца: SubscriptionAdmin + PaymentAdmin (confirm action) + PlanAdmin + UsageCounterAdmin
+- Admin клиники: ClinicUser → read-only кабинет с изоляцией по get_queryset
+- seed_billing_demo: три клиники (trialing / active / suspended), идемпотентна
+- test_billing_flow: 7 сценариев офлайн (mock-провайдеры, eager Celery), ✅/❌ по каждому
+
+Что заглушка:
+- Реальный эквайер: KaspiBillingProvider — класс есть, методы → NotImplementedError.
+  Нужен договор с банком (Kaspi API) или иным эквайером.
+
+🟡 Следующий шаг — **Фаза 6** (прод): Meta Cloud API, деплой (docker + домен), мониторинг,
+   реальный платёжный провайдер вместо manual.
+🟢 Усиление бота (Промпт #10.1): новое промпт-ядро (12 правил + чек-лист),
+   контекст времени (TODAY/WEEKDAY/NOW/TOMORROW, Asia/Almaty) и валидация
+   желаемого времени записи (`validate_booking`) перед отправкой менеджеру.
+   74/74 pytest. См. «Завершённые промпты».
 🟢 Фаза 1 закрыта — текстовый бот на одну клинику проверен end-to-end с реальными ключами.
 🟢 Фаза 2 закрыта — голосовой пайплайн проверен end-to-end на mock.
 🟢 Фаза 3 ЗАКРЫТА — заявки на запись + уведомление менеджера:
@@ -40,10 +63,388 @@ EVOLUTION_INSTANCE (см. CLAUDE.md, раздел «Evolution API (WhatsApp дл
 - [x] Фаза 2 — Голосовые сообщения (Whisper через Groq)
 - [x] Фаза 3 — Заявки на запись + уведомление менеджера
 - [x] Фаза 4 — Мультитенант (много клиник на одном сервере)
-- [ ] Фаза 5 — Биллинг (месячный тариф)
-- [ ] Фаза 6 — Прод (Meta Cloud API, деплой, мониторинг)
+- [x] Фаза 5 — Биллинг (месячный тариф) — ЗАВЕРШЕНА ✅ 2026-06-05
+      (Промпты #1–#7: модели + сервисный слой + гейт подписки + usage-учёт +
+      BillingProvider manual|kaspi + beat-цикл + admin + seed_billing_demo +
+      test_billing_flow (7 офлайн-проверок) + чеклист ручного теста)
+- [ ] Фаза 6 — Прод (Meta Cloud API, деплой, мониторинг, реальный эквайер)
 
 ## Завершённые промпты
+### Промпт #7 (Фаза 5) — ФИНАЛ: seed_billing_demo + test_billing_flow + чеклист + Phase 5 complete — ✅ 2026-06-05
+- [x] **`billing/management/commands/seed_billing_demo.py`** — создаёт три тестовые
+      клиники с разными состояниями подписки: trialing (период активен), active
+      (оплачена, период активен), suspended (период 2 месяца назад). Печатает id,
+      статус, период, serviceable-флаг. Идемпотентна (get_or_create по instance_name).
+      Тариф `billing_demo` (code unique) — не конфликтует с `start`/`pro`.
+- [x] **`billing/management/commands/test_billing_flow.py`** — 7 офлайн-проверок
+      (mock-провайдеры через `patch`, eager Celery), печатает ✅/❌ по каждому:
+      1. Триальная клиника: входящее → AI вызван, UsageCounter.messages_in вырос.
+      2. Сдвинули period_end за trial_end+GRACE → run_billing_cycle → suspended.
+      3. Входящее в suspended → generate/transcribe НЕ вызваны, счётчик не вырос.
+      4. ManualBillingProvider.create_payment + confirm_payment → active, период +30д.
+      5. Входящее снова → AI снова вызван, бот ответил.
+      6. Повторный confirm_payment → период НЕ сдвинулся (идемпотентность).
+      7. Повторный run_billing_cycle в тот же «день» → новых событий/уведомлений нет.
+      Флаг `--keep` оставляет тестовые данные. Печатает чеклист ручного теста.
+- [x] **Чеклист ручного теста** (в конце test_billing_flow): BILLING_PROVIDER=manual +
+      реальный WhatsApp + Groq; admin-суспенд → бот молчит → подтвердить платёж →
+      бот отвечает; напоминания через beat (сдвинуть period_end, запустить billing_cycle).
+- [x] **pytest 133/133** — полный прогон Фаз 1–5, все зелёные. Новые команды не
+      добавляют тесты (pytest их не видит — не test_*.py), но не ломают ни одного.
+- [x] **`progress.md`** обновлён: Фаза 5 = ЗАВЕРШЕНА; Промпты #1–#7 в Завершённых;
+      статус/дорожная карта/итог зафиксированы.
+- [x] **Git commit**: «Phase 5 complete: monthly subscription billing».
+
+### Промпт #6 (Фаза 5) — Admin биллинга: кабинет владельца + кабинет клиники — ✅ 2026-06-05
+- [x] **Изучены существующий admin Фазы 4 и billing/admin.py перед правкой:** стиль
+      `list_editable`/`list_display_links`/`search_fields`, `_PrettyJSONWidget`,
+      fieldsets. Промпт #8.4 явно отложил per-clinic скоупинг до появления
+      `ClinicUser`. Реализован здесь.
+- [x] **`clinics/models.py::ClinicUser`** — новая модель `User` OneToOneField
+      (`clinic_profile`) → `Clinic` FK (`staff_users`). Простейшая связь: зарегистрировал
+      менеджера в Django admin, привязал к клинике → он заходит в свой read-only кабинет.
+      Миграция `clinics/0005_clinicuser`.
+- [x] **`clinics/admin.py::ClinicUserAdmin`** — list + search + autocomplete_fields.
+      Регистрация рядом с `ClinicAdmin` в том же стиле.
+- [x] **`billing/services.py::reset_trial(subscription)`** — новая функция:
+      status→trialing, period_start=now, period_end/trial_end = now+TRIAL_DAYS,
+      canceled_at=None. Единый источник истины — переход только через services.
+- [x] **`_ClinicScopedMixin`** (billing/admin.py) — примесь для скоупинга: суперадмин
+      → qs без фильтра; ClinicUser → `filter(clinic=clinic)` или `qs.none()` (нет
+      привязки). `get_actions` зачищает все action'ы для не-суперадминов. Все
+      `has_change/add/delete_permission` → False для не-суперадминов.
+- [x] **`SubscriptionAdmin`** (владелец):
+      • `list_display`: clinic, plan, status, current_period_end, `days_remaining`
+        (вычисляемый: «N дн.» / «просрочено N дн.»), `usage_messages_in`
+        (вычисляемый: «N / limit» или «N» безлимит).
+      • `list_filter = (status, plan)`, `search_fields = (clinic__name,)`.
+      • Actions: `action_renew` → `services.renew` (ловит ValueError → WARNING);
+        `action_activate_pro` → `services.activate(plan=Plan.get(code="pro"))`
+        (DoesNotExist → ERROR); `action_to_trial` → `services.reset_trial`;
+        `action_suspend` → `services.suspend`. Каждое action сообщает `message_user`.
+      • Для ClinicUser: пустой `get_actions`, `has_change/add/delete=False` → read-only.
+- [x] **`PaymentAdmin`** (владелец):
+      • `action_confirm_payment` → `get_billing_provider().confirm_payment(payment)`
+        для каждого выбранного; уже paid — skip + WARNING. Ошибки логируются
+        `logger.exception`, не роняют action.
+      • `get_readonly_fields` расширяет `external_id` + `amount_kzt` readonly после paid.
+      • ClinicUser: read-only история платежей своей клиники, actions недоступны.
+- [x] **`PlanAdmin`** — только суперадмин (`has_view/change/add/delete_permission`).
+      Список тарифов с `list_editable = (price_kzt, is_active)` — владелец правит
+      цены прямо в таблице без кода.
+- [x] **`UsageCounterAdmin`** — `_ClinicScopedMixin` + `has_add/change=False` (readonly).
+      Суперадмин видит все, ClinicUser — только свой счётчик за текущий период.
+- [x] **`BillingEventLogAdmin`** — только суперадмин (`has_view_permission`), readonly.
+- [x] **`config/test_settings.py`** + обновлён `pytest.ini` (`DJANGO_SETTINGS_MODULE =
+      config.test_settings`): тесты переведены на SQLite :memory: (без Docker), что
+      позволяет запускать pytest без запущенного контейнера postgres.
+      `USE_SQLITE_FOR_TESTS=1` в `settings.py` — 5-строчный conditional.
+      `conftest.py` оставлен (ставит флаг на всякий случай), реальная точка входа —
+      test_settings.py.
+- [x] **`billing/test_admin.py`**, 13 тестов (RequestFactory + AdminSite, офлайн):
+      renew активной подписки → active; renew без плана → ничего не меняется;
+      activate_pro → active + plan=pro; activate_pro без плана в БД → ERROR, нет смены;
+      to_trial → trialing; suspend → suspended; confirm_payment → paid + active;
+      повторный confirm → период не двигается (идемпотентность); ClinicUser видит
+      только свою подписку/платёж/usage; суперадмин видит все; actions пусты для
+      ClinicUser.
+- [x] **Прогон:** `manage.py check` — 0 issues; `makemigrations --check` — No changes;
+      **pytest 133/133** (было 120, +13). Изоляция работает.
+- [x] **Решения:** admin владельца: подписки с actions (renew/pro/trial/suspend) +
+      платежи с подтверждением + тарифы + usage; клиника видит свою панель биллинга
+      read-only с изоляцией через ClinicUser↔get_queryset (тот же механизм clinic FK).
+
+### Промпт #5 (Фаза 5) — Биллинг: ежедневный фоновый billing-cycle (beat) — ✅ 2026-06-05
+- [x] **Изучён существующий Celery/beat и приём идемпотентности перед правкой:**
+      beat-расписания в проекте НЕ было (только `config/celery.py` с autodiscover);
+      «ReminderLog» из Фазы 3 как отдельной модели нет — напоминания шли инлайн.
+      Готовый приём идемпотентности уже жил в `services.alert_over_limit_once`:
+      `BillingEventLog.objects.get_or_create(subscription, period_key, event_type)` +
+      `unique_together` → событие за период ровно один раз. Повторил ровно его в цикле.
+- [x] **`billing/tasks.py::run_billing_cycle`** (`@shared_task`, `ignore_result`) —
+      идёт по всем `Subscription.select_related("clinic","plan")`. Одна сбойная подписка
+      не валит прогон (try/except на подписку, `logger.exception`, счётчики
+      processed/errors в return). Полностью офлайн: отправка — через
+      `get_whatsapp_provider_for_clinic` (mock просто логирует).
+- [x] **`period_key = f"{subscription_id}:{current_period_end:%Y-%m-%d}"`** — ключ
+      периода для дедупа (`_period_key`). Привязан к концу периода → после renew/оплаты
+      конец сдвигается, ключ меняется, события нового периода считаются заново.
+- [x] **Логика по подписке (`_process_subscription`):**
+      • **Напоминания T-3 / T-1** (status in trialing/active, период идёт): порог
+        `days_left <= 3` → `reminder_3d`, `days_left <= 1` → `reminder_1d`; событие
+        резервируется в `BillingEventLog` ДО отправки (как `alert_over_limit_once`) →
+        «ровно один раз», устойчиво к пропущенному дню beat. Шаблоны — константы в коде,
+        нейтральные, без давления.
+      • **Просрочка → `past_due`**: `now > period_end` и статус active/trialing →
+        `services.mark_past_due`.
+      • **Автосуспенд**: `now > period_end + GRACE_DAYS` и статус past_due →
+        `services.suspend` + (если события `expired_suspend` за период ещё нет)
+        уведомление менеджеру «сервис приостановлен». В одном прогоне active за грейсом
+        проходит active→past_due→suspended (обрабатывает пропуски beat).
+      • **Алерт владельцу о лимите** (мягкий, из #3): `services.is_over_limit` →
+        НОВЫЙ event_type `OWNER_LIMIT_ALERT` (отдельно от пайплайнного `LIMIT_REACHED`,
+        чтобы они не «съедали» уведомление друг друга), раз за период. Шлём на
+        `settings.OWNER_WHATSAPP` (если задан), иначе только лог. Бота НЕ трогаем.
+- [x] **Гейт `is_clinic_serviceable` расширен**: в `_SERVICEABLE_STATUSES` добавлен
+      `PAST_DUE` — после того как цикл пометил подписку past_due, бот ОБЯЗАН работать
+      в пределах grace (проверку `now < period_end + GRACE_DAYS` гейт уже делает).
+      Раньше past_due сразу выпадал из обслуживания — латентный баг, вскрытый Промптом #5.
+      Существующие тесты не ломаются (serviceability past_due нигде не проверялась).
+- [x] **Beat-расписание**: `settings.CELERY_BEAT_SCHEDULE["billing-daily-cycle"]` =
+      `run_billing_cycle` по `crontab(hour=9, minute=0)` (Asia/Almaty, `CELERY_TIMEZONE`).
+      Новый сервис `beat` в `docker-compose.yml` (`celery -A config beat -l info`).
+- [x] **Модель/миграция**: `BillingEventLog.EventType.OWNER_LIMIT_ALERT`
+      (`billing/0004_alter_billingeventlog_event_type`). `.env.example`: `OWNER_WHATSAPP`
+      (опционально, с комментарием) + `settings.OWNER_WHATSAPP`.
+- [x] **Тесты** `billing/test_billing_cycle.py`, 8 шт. (mock, офлайн, управляемый
+      `Clock` — freezegun в окружении нет, как и в test_services.py): T-3 шлёт ровно
+      одно напоминание, повтор в тот же день не дублирует; T-1 после T-3 → ещё одно
+      (3d не задваивается); конец периода → past_due + бот по гейту ещё обслуживает
+      (в грейсе); после grace → suspended ровно один раз, повтор не шлёт второй суспенд,
+      серв уже не обслуживается; active далеко за грейсом → past_due→suspended за один
+      прогон; renew сдвигает период → напоминание нового периода считается заново
+      (две записи reminder_3d); превышение лимита → алерт владельцу один раз (повтор не
+      дублирует); без OWNER_WHATSAPP → событие есть, сообщение не шлём (только лог).
+- [x] **Прогон:** **pytest 120/120** (было 112, +8); `manage.py check` — 0 issues;
+      `makemigrations --check` — No changes; `migrate` применил billing.0004 чисто;
+      beat поднят (LocalTime Asia/Almaty); смоук `run_billing_cycle()` на реальной БД —
+      `{'processed': 1, 'errors': 0}`.
+- [x] **Решения:** beat run_billing_cycle ежедневно; идемпотентность через
+      `BillingEventLog(period_key, event_type)`; past_due→grace→suspend; напоминания
+      T-3/T-1 менеджеру.
+
+### Промпт #4 (Фаза 5) — Биллинг: BillingProvider-абстракция (manual|kaspi) + вебхук-заглушка — ✅ 2026-06-05
+- [x] **Изучён стиль существующих провайдеров перед правкой** (не изобретал новый):
+      WhatsApp (`providers/whatsapp/`: base ABC + factory с `lru_cache` + выбор по
+      `settings.WHATSAPP_PROVIDER`, реализации mock/evolution, meta — не реализована)
+      и AI (`providers/ai/`: тот же шаблон, mock/groq). Повторил ровно этот стиль
+      для биллинга: новый пакет `providers/billing/` (base + manual + kaspi + factory).
+- [x] **`providers/billing/base.py::BillingProvider`** (ABC) — три метода:
+      • `create_payment(subscription, plan) -> Payment` (создаёт pending);
+      • `confirm_payment(payment) -> Payment` (paid + активация; контракт —
+        ИДЕМПОТЕНТНОСТЬ зафиксирована в докстринге);
+      • `handle_webhook(payload) -> Payment | None` (для будущих реальных эквайеров).
+      Деньги/переходы статусов НЕ дублирует — единый источник истины остаётся в
+      `billing.services`/`billing.models`.
+- [x] **`ManualBillingProvider`** (основной MVP, `BILLING_PROVIDER=manual`):
+      • `create_payment`: `Payment(provider="manual", status="pending",
+        amount_kzt=plan.price_kzt)`, period_start=now, period_end=now+plan.period_days,
+        привязка clinic/subscription/plan.
+      • `confirm_payment`: `status="paid"`, `paid_at=now`, затем — если подписка УЖЕ
+        была active с тарифом → `services.renew` (период наращивается от старого конца);
+        иначе (триал/past_due/suspended/без тарифа) → `services.activate(plan=...)`
+        (период от now). **Идемпотентность**: если платёж уже `paid` — ранний return,
+        период второй раз не двигается.
+      • `handle_webhook`: для manual → `None` (оплата подтверждается в коде/admin).
+- [x] **`KaspiBillingProvider`** — ЗАСТАБ (`BILLING_PROVIDER=kaspi`), как `meta` у
+      WhatsApp, но строже: КЛАСС существует и подключён в фабрику, методы поднимают
+      `NotImplementedError` с понятным сообщением «требуется договор с эквайером».
+      В докстринге описано, что будет: create_payment вернёт ссылку на оплату +
+      external_id; handle_webhook примет колбэк банка, проверит подпись, найдёт
+      Payment по external_id и вызовет confirm_payment; confirm_payment как у manual.
+- [x] **`providers/billing/factory.py::get_billing_provider()`** — `lru_cache`,
+      выбор по `settings.BILLING_PROVIDER` (manual|kaspi), неизвестный → ValueError.
+      Один в один со стилем `get_whatsapp_provider`/`get_ai_provider`.
+- [x] **DRF-эндпоинт-заглушка** `POST /billing/webhook/` (`billing/views.py::
+      billing_webhook`, `@api_view`, без CSRF/сессии — как `whatsapp_webhook`):
+      зовёт `get_billing_provider().handle_webhook(request.data)`, отвечает 200.
+      manual → `{"status":"ignored"}` (no-op); застаб-провайдер (NotImplementedError)
+      ловится → 200 `{"status":"not_implemented"}`. Подключён в `config/urls.py`.
+      Это ЗАДЕЛ под реальный эквайер, не боевой код.
+- [x] **Тесты** `billing/test_billing_provider.py`, 7 шт. (manual, офлайн, Clock-
+      монипатч `timezone.now`): фабрика по умолчанию = manual; kaspi подключён, но
+      методы → NotImplementedError; create_payment → pending на верный период
+      (now…now+period_days) и сумму (=plan.price_kzt); confirm из триала → paid +
+      active, период от now; confirm активной → renew (старт = старый конец,
+      непрерывное продление); повторный confirm того же Payment (и свежего из БД) НЕ
+      двигает период и paid_at (идемпотентность); manual.handle_webhook → None.
+      Примечание: код плана в фикстуре — `prov_test` (не `start`/`pro`, их сидит
+      data-миграция 0002, иначе IntegrityError на unique `code`).
+- [x] **Прогон:** **pytest 112/112** (было 105, +7); `manage.py check` — 0 issues;
+      `makemigrations --check` — No changes (новых полей моделей не вводили).
+- [x] **Решения:** BillingProvider-абстракция manual|kaspi через `BILLING_PROVIDER`;
+      manual = подтверждение платежа в коде → продление; kaspi застаблен;
+      вебхук-эндпоинт-заглушка готова.
+
+### Промпт #3 (Фаза 5) — Биллинг: гейт подписки в пайплайне + учёт потребления — ✅ 2026-06-05
+- [x] **Изучен реальный путь обработки перед правкой** (не угадывал): webhook →
+      `messaging/tasks.py::handle_incoming_message`. Клиника резолвится в шаге 0
+      (`_resolve_clinic`), реальные вызовы Groq — `get_ai_provider().transcribe()`
+      (голос, шаг 0b) и `ai.generate()` (текст, else-ветка шага 6). Дедуп входящих —
+      по `Message.external_id` (шаг 3). Сервисный слой (`billing/services.py`) и модели
+      (`UsageCounter`/`BillingEventLog`) переиспользованы как есть.
+- [x] **Гейт подписки (шаг 0c)** — вставлен МЕЖДУ резолвом клиники и вызовом AI,
+      ПОСЛЕ менеджерской ветки (0a, токены не тратит) и ДО голосовой (0b, Whisper):
+      `if not billing.is_clinic_serviceable(clinic): log + (опц.) уведомление + return`.
+      Неоплатившей клинике Groq не дёргается вообще — ни транскрипция, ни генерация,
+      ни booking-extraction (всё после гейта). Поведение оплаченной клиники — прежнее.
+- [x] **Учёт потребления через F() (атомарно), идемпотентно:**
+      • `messages_in +1` — после сохранения входящего `Message` (шаг 5a). Стоит ПОСЛЕ
+        дедупа по `external_id` → ретрай Celery-задачи выходит на дубле и до инкремента
+        не доходит ⇒ одно сообщение не задваивает счётчик.
+      • `ai_calls +1` — на КАЖДЫЙ реальный вызов Groq на уровне пайплайна: Whisper
+        (флаг `transcribed`, учитывается после дедупа) и `generate` (сразу после
+        успешного вызова). Booking-extraction (внутренний вызов Фазы 3) намеренно не
+        инструментировал — не трогаю логику Фаз 1–3.
+      • `messages_out +1` — после успешной отправки ответа (`result.success`).
+      • Хелперы `record_incoming/record_ai_call/record_outgoing` + `_bump` (F()-update
+        по pk счётчика текущего периода) в `billing/services.py`.
+- [x] **Мягкий лимит → алерт раз за период (`alert_over_limit_once`)**: если
+      `is_over_limit` стал True и в этом периоде ещё не алертили — пишем
+      `BillingEventLog(LIMIT_REACHED)` (новый `EventType`, `unique_together` не даёт
+      дубль) + `logger.warning`. Бота НЕ отключаем (уведомление владельцу — Промпт #5).
+- [x] **Suspended-уведомление с тротлингом** (`_maybe_send_suspended_notice` в tasks):
+      по флагу `settings.SEND_SUSPENDED_NOTICE` (default True) один раз за
+      `SUSPENDED_NOTICE_THROTTLE_HOURS` (default 24) шлём нейтральное «Сервис временно
+      недоступен, мы скоро свяжемся с вами». Отметка — `Conversation.suspended_notice_at`
+      (новое поле + миграция `messaging/0005`). Никакого AI и медицинских ответов.
+      Сообщения/заявки suspended-клинике НЕ создаём.
+- [x] **Настройки/миграции:** `SEND_SUSPENDED_NOTICE`, `SUSPENDED_NOTICE_THROTTLE_HOURS`
+      в `settings.py` + `.env.example`. Миграции: `messaging/0005` (поле),
+      `billing/0003` (новый `EventType.LIMIT_REACHED`).
+- [x] **Тесты** `billing/test_gate.py`, 6 шт. (mock-провайдеры, офлайн): оплаченная/
+      триальная → AI вызван, счётчики `messages_in/ai_calls/messages_out`=1; ретрай
+      того же external_id → AI не вызван, счётчики не задвоились (по одному Message
+      user/assistant); suspended → `generate`/`transcribe` НЕ вызваны, 0 Message,
+      0 BookingRequest, счётчики не растут, задача не падает; тротлинг — два сообщения
+      подряд → уведомление ушло один раз + отметка на диалоге; флаг выключает
+      уведомление; мягкий лимит → алерт ровно один раз за период (3-е сообщение не
+      дублирует), бот продолжает отвечать.
+- [x] **Прогон:** **pytest 105/105** (было 99, +6); `manage.py check` — 0 issues;
+      `makemigrations --check` — No changes; миграции применены чисто.
+- [x] **Решения:** гейт подписки до вызова AI; неоплатившим Groq не дёргаем; usage
+      через F() идемпотентно; suspended-уведомление с тротлингом.
+
+### Промпт #2 (Фаза 5) — Биллинг: чистый сервисный слой подписки — ✅ 2026-06-05
+- [x] **Изучен код Промпта #1 перед правкой:** модели `Plan/Subscription/...`,
+      сигнал автотриала, settings (`TRIAL_DAYS=14`, `GRACE_DAYS=3`). Логику триала из
+      сигнала переиспользовал в `start_trial` (тот же `get_or_create`), не дублировал.
+- [x] **`billing/services.py`** — БЕЗ сети, БЕЗ WhatsApp/Groq/Celery, только логика +
+      БД. Функции (каждая отдельная, тестируемая):
+      • `is_clinic_serviceable(clinic) -> bool` — True ТОЛЬКО если `clinic.is_active`,
+        есть подписка, `status in (trialing, active)` И `now < current_period_end +
+        GRACE_DAYS`. Grace держит гейт корректным, даже если Celery-суспенд ещё не
+        отработал. Нет подписки / `is_active=False` / нет `current_period_end` → False.
+        Исключений наружу нет (`_get_subscription` ловит `DoesNotExist`).
+      • `start_trial(clinic)` — идемпотентно (`get_or_create`), подстраховка к сигналу.
+      • `activate(subscription, *, plan, period_start=None, period_days=None)` — в
+        `active`: plan, `current_period_start` (=now если не задан), `current_period_end`
+        (=start + period_days, по умолчанию `plan.period_days`), `canceled_at=None`.
+        Работает из past_due/suspended («оплатил — продлеваем»).
+      • `renew(subscription)` — новый старт = старый `current_period_end` (или now, если
+        просрочен), конец = старт + `plan.period_days`, status→active. Без plan → ValueError.
+      • `mark_past_due` / `suspend` / `cancel` — переходы статусов (cancel ставит
+        `canceled_at`). Все переходы логируются (`logging.info`, старый→новый статус).
+      • `get_or_create_usage(clinic, when=None)` — счётчик за период ПОДПИСКИ (границы
+        `current_period_start/end`), не за календарный месяц. `get_or_create` по
+        `(clinic, period_start)` → один счётчик на период.
+      • `is_over_limit(clinic)` — `messages_in > plan.message_limit` за текущий период.
+        Безлимит/нет подписки/нет плана → False. МЯГКИЙ сигнал, бота НЕ отрубает.
+- [x] **Единый источник истины:** смена `Subscription.status` — ТОЛЬКО через эти
+      функции; в других местах ручного `subscription.status = …` нет.
+- [x] **Тесты** `billing/test_services.py`, 18 шт. (mock, офлайн). Время — управляемый
+      `Clock` (монипатч `django.utils.timezone.now`; freezegun в окружении нет).
+      ВСЕ ветки: триал не истёк → serviceable; истёк за грейсом (статус всё ещё
+      trialing — суспенд не запускали) → не serviceable; активный в периоде →
+      serviceable; активный, период кончился, но в грейсе → serviceable (и за грейсом
+      → нет); suspended/canceled/нет подписки/`is_active=False` → не serviceable;
+      activate из suspended возвращает в строй; renew непрерывный (старт=старый конец)
+      и после просрочки (старт=now); renew без плана → ValueError; mark_past_due;
+      usage за период создаётся один раз (привязка к границам подписки); is_over_limit
+      по messages_in (1000=ровно лимит→False, 1001→True), безлимит→False, без подписки→False.
+- [x] **Прогон:** `makemigrations --check` — No changes; `manage.py check` — 0 issues;
+      **pytest 99/99** (было 81, +18). Сети нет — модуль чистый.
+- [x] **Решения:** единый сервисный слой подписки; serviceable = статус + период с
+      grace; лимит сообщений — мягкий, не отрубает.
+
+### Промпт #1 (Фаза 5) — Биллинг: приложение billing + модели подписки — ✅ 2026-06-05
+- [x] **Изучен существующий код перед правкой** (не дублировал): `Clinic` в `clinics/`,
+      доменные модели (`Conversation`/`Message`/`BookingRequest`) несут FK `clinic`
+      (PROTECT) + пары `created_at`/`updated_at` через `auto_now_add`/`auto_now` —
+      повторил тот же стиль. Отдельной базовой абстрактной модели времени в проекте
+      нет (каждая модель объявляет поля сама) — следовал этому же подходу, не вводил
+      новую базу. Сигналов в проекте не было — добавил первый через `apps.ready()`.
+- [x] **Приложение `billing`** создано рядом с существующими, подключено в
+      `INSTALLED_APPS`. `apps.py::BillingConfig.ready()` импортирует `signals`.
+- [x] **Модели (`billing/models.py`), деньги ВЕЗДЕ `DecimalField(12,2)` — никакого float:**
+      • `Plan` — `code` (unique), `name`, `price_kzt`, `period_days` (default 30),
+        `message_limit` (Positive, null=безлимит), `features` (JSON default=dict),
+        `is_active`, created/updated.
+      • `Subscription` — `clinic` OneToOne(CASCADE, related_name="subscription"),
+        `plan` FK(PROTECT, null), `status` (trialing/active/past_due/suspended/canceled,
+        default trialing, indexed), `current_period_start/end`, `trial_end`,
+        `canceled_at`, created/updated.
+      • `Payment` — `clinic` FK(PROTECT), `subscription` FK(SET_NULL, null),
+        `plan` FK(PROTECT, null), `amount_kzt`, `provider` (default "manual"),
+        `external_id` (unique, null), `status` (pending/paid/failed, default pending),
+        `period_start/end`, `paid_at`, `created_at`.
+      • `UsageCounter` — `clinic` FK(PROTECT), `period_start/end`, `messages_in/out`,
+        `ai_calls` (все Positive default 0). `unique_together (clinic, period_start)`.
+      • `BillingEventLog` — `subscription` FK(CASCADE), `period_key`, `event_type`
+        (reminder_3d/reminder_1d/expired_suspend/period_renewed), `created_at`.
+        `unique_together (subscription, period_key, event_type)` — защита от дублей рассылок.
+- [x] **Сигнал** `billing/signals.py::create_trial_subscription` (post_save на Clinic,
+      `dispatch_uid`): при `created=True` через `get_or_create` заводит подписку
+      `trialing`, `trial_end = now + settings.TRIAL_DAYS`, `current_period_start = now`,
+      `current_period_end = trial_end`. Повторный save клинику не плодит подписки.
+      Все datetime — `timezone.now()` (aware, проект на Asia/Almaty, USE_TZ).
+- [x] **Настройки** (`config/settings.py`, из env с дефолтами): `TRIAL_DAYS=14`,
+      `GRACE_DAYS=3`, `BILLING_PROVIDER="manual"`. Те же три добавлены в `.env.example`
+      с комментариями.
+- [x] **Data-миграция** `billing/0002_seed_plans_and_backfill_trials.py` (RunPython):
+      • два тарифа-плейсхолдера `start` (15000 ₸, лимит 1000) и `pro` (30000 ₸,
+        безлимит) через `update_or_create` (цены — заглушки, владелец правит в admin —
+        написано в комментарии миграции);
+      • бэкфилл: каждой существующей клинике без подписки создаёт триал
+        (`subscription__isnull=True`), чтобы прод не сломался после деплоя.
+- [x] **Admin** (`billing/admin.py`): Plan (цена/активность `list_editable`),
+      Subscription/Payment/UsageCounter/BillingEventLog зарегистрированы (только Django
+      admin, без фронта). Пайплайн обработки сообщений и маршрутизация НЕ тронуты.
+- [x] **Тесты** `billing/test_models.py`, 7 шт. (на mock, без сети): автотриал при
+      создании клиники (status + trial_end ≈ now+TRIAL_DAYS); повторный save не плодит
+      подписку; деньги — Decimal; тарифы-плейсхолдеры из миграции (start с лимитом,
+      pro безлимит); дефолты Payment; уникальность UsageCounter и BillingEventLog.
+- [x] **Прогон:** `makemigrations --check` — No changes detected; `manage.py check` —
+      0 issues; `migrate` применил billing.0001+0002 чисто; **pytest 81/81** (было 74, +7).
+      Проверено в БД: 1 клиника → 1 подписка (0 без подписки), Plan.price_kzt тип Decimal.
+
+### Промпт #10.1 — Усиление бота: новое промпт-ядро + контекст времени + валидация записи — ✅ 2026-06-05
+- [x] **Новое промпт-ядро** в `messaging/services/prompt.py`: константа `PROMPT_CORE`
+      с плейсхолдерами `{{...}}`; роль администратора-ассистента, 12 жёстких правил
+      (только данные клиники, кратко, не зацикливаться, проверка времени до
+      подтверждения, анти-гейминг, медбезопасность и т.д.) + чек-лист записи.
+      Подстановка данных клиники сохранена: `CLINIC_NAME`, `ADDRESS`,
+      `PHONE` (= `whatsapp_number`), `WORKING_HOURS_HUMAN`, `SERVICES_LIST`, `FAQ`.
+      Подстановка идёт простым `str.replace` (в ядре нет других фигурных скобок).
+- [x] **`build_time_context()`** (TZ `Asia/Almaty`): `TODAY` (дд.мм.гггг),
+      `WEEKDAY` (день недели по-русски), `NOW` (чч:мм), `TOMORROW`. Подставляются
+      в промпт → модель не выдумывает дату. `PUSH_NAME` ← `customer_name` профиля
+      (пусто → «неизвестно»). Часы работы подаются человекочитаемо в
+      `{{WORKING_HOURS_HUMAN}}` (новый `_working_hours_human`: «Пн–Пт 09:00–20:00; …»).
+- [x] **`validate_booking(appt_date, appt_time, working_hours) -> (ok, reason)`**
+      в `bookings/flow.py`: блокирует прошлую дату/время, выходной день, время вне
+      часов работы, не кратное 30 минутам, и меньше часа до закрытия
+      (`SLOT_BUFFER_MIN=60`, `SLOT_STEP_MIN=30`). reason — готовый текст пациенту.
+      **Адаптирован под РЕАЛЬНЫЙ формат `Clinic.working_hours`** (человекочитаемый
+      кириллический: `{"Пн–Пт":"09:00–20:00","Вс":"выходной"}`) И под формат-пример
+      из ТЗ (`{"mon":["09:00","20:00"],"sun":None}`) — парсер `_day_hours`
+      понимает оба (диапазоны дней через тире -/–/—, списки, «выходной»).
+- [x] **Интеграция в Фазу 3**: в `messaging/tasks.py` перед `notify_manager`
+      (ветка «черновик собран полностью») вызывается `validate_booking_draft`.
+      Если `ok == False` — заявка НЕ отправляется, пациенту возвращается `reason`,
+      невалидное время стирается из черновика, stage → `collecting`
+      (`_revert_invalid_time`). Анти-тупиковый хендофф намеренно НЕ валидируется
+      (это явная передача человеку «как есть»).
+- [x] **Окно истории** в LLM — 10 последних сообщений (`DEFAULT_HISTORY_LIMIT=10`,
+      уже было; подтверждено, `build_messages`/`get_history` по умолчанию = 10).
+- [x] **Провайдер-абстракции, шифрование, мультитенант-маршрутизация — не тронуты.**
+- [x] **Тесты** — `bookings/test_validation.py`, 8 шт. (офлайн, без БД): 7:00
+      (раньше открытия), 8:59 (раньше открытия / не /30), 10:15 (внутри часов, не /30
+      → правило шага), воскресенье (выходной), прошлая дата, валидное 10:00 (ok),
+      19:30 (меньше часа до закрытия), формат-пример из ТЗ (список + None).
+- [x] **Прогон:** `pytest` — **74/74 зелёных** (было 66, +8); `manage.py check`
+      — 0 issues; рендер промпта проверен (нет остаточных `{{ }}`, все данные на месте).
+
 ### Промпт #9 — Фаза 4: онбординг новой клиники + check_clinic — ✅ 2026-06-05
 - [x] **Верификация маршрутизации:** добавление новой клиники НЕ требует правок кода.
       Routing в `messaging/tasks.py::_resolve_clinic` — полностью из БД: сначала по
@@ -810,6 +1211,8 @@ EVOLUTION_INSTANCE (см. CLAUDE.md, раздел «Evolution API (WhatsApp дл
   (SDK клиент создаётся без явного `base_url`, значение берётся из ENV).
 
 ## Решения и важные детали
+- **[Промпт #1, Фаза 5] billing: Plan/Subscription/Payment/UsageCounter/BillingEventLog;
+  деньги в Decimal ₸; автотриал через сигнал; бэкфилл триала на существующие клиники.**
 - **[Промпт #6] Сообщения от `manager_whatsapp` идут в ветку менеджера (НЕ как
   пациент).** Проверка отправителя — первым шагом в `handle_incoming_message`, до
   голоса/диалога/записи; новую переписку/заявку для менеджера не заводим. Команды
