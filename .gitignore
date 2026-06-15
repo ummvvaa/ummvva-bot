@@ -19,3 +19,7 @@ db.sqlite3
 .DS_Store
 .idea/
 .vscode/
+.claude/
+CLAUDE.md
+progress.md
+zapusk.md
